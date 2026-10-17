@@ -1,4 +1,4 @@
-//! Messages exchanged between a Connect client and host.
+//! Messages exchanged between a Conductor client and host.
 //!
 //! HTTP bodies and data-channel messages are JSON. Data-channel messages are
 //! tagged with `t` so the web client can switch on a short string.
@@ -34,6 +34,31 @@ pub struct DisplayInfo {
     pub primary: bool,
     #[serde(rename = "virtual")]
     pub is_virtual: bool,
+}
+
+/// A machine on the tailnet that Conductor can show on the device list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Device {
+    /// Tailscale's stable node ID.
+    pub id: String,
+    /// Short machine name, e.g. `desktop`.
+    pub name: String,
+    /// Full MagicDNS name without the trailing dot, e.g. `desktop.tail1234.ts.net`.
+    pub dns_name: String,
+    /// Tailscale IPv4 address; what clients connect to.
+    pub address: String,
+    pub os: String,
+    /// Tailscale sees the machine as connected.
+    pub online: bool,
+    /// Present when Conductor is running there and answered.
+    pub host: Option<HostInfo>,
+    /// The machine that produced this list.
+    #[serde(default)]
+    pub is_self: bool,
+    /// The machine that asked for this list.
+    #[serde(default)]
+    pub is_you: bool,
 }
 
 /// Body of `POST /api/session`.

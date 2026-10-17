@@ -1,6 +1,6 @@
-# Connect design rules
+# Conductor design rules
 
-Connect should feel like a well-made native utility: quiet, fast, obvious. Every screen is checked against this file before it ships.
+Conductor should feel like a well-made native utility: quiet, fast, obvious. Every screen is checked against this file before it ships.
 
 ## Principles
 

@@ -1,4 +1,4 @@
-//! Connect host: makes this PC controllable from your other tailnet devices.
+//! Conductor host: makes this PC controllable from your other tailnet devices.
 
 mod capture;
 mod convert;
@@ -9,7 +9,6 @@ mod pipeline;
 mod server;
 mod session;
 mod state;
-mod tailscale;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -24,7 +23,7 @@ struct Args {
 }
 
 fn parse_args() -> Result<Args> {
-    let mut port = connect_proto::DEFAULT_PORT;
+    let mut port = conductor_proto::DEFAULT_PORT;
     let mut web_dir = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -50,11 +49,11 @@ fn dpi_aware() {
     unsafe { _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
 }
 
-async fn wait_for_tailscale() -> tailscale::Status {
+async fn wait_for_tailscale() -> conductor_tailnet::Status {
     let mut warned = false;
     loop {
-        match tailscale::status().await {
-            Ok(s) if s.backend_state == "Running" && s.self_node.is_some() => return s,
+        match conductor_tailnet::status().await {
+            Ok(s) if s.is_running() => return s,
             Ok(s) if !warned => tracing::warn!("waiting for Tailscale (state: {})", s.backend_state),
             Err(e) if !warned => tracing::warn!("waiting for Tailscale: {e:#}"),
             _ => {}
@@ -74,10 +73,8 @@ async fn main() -> Result<()> {
     let args = parse_args()?;
 
     let status = wait_for_tailscale().await;
-    let me = status.self_node.as_ref().unwrap();
-    let ip = me.tailscale_ips.iter().copied().find(IpAddr::is_ipv4).context("no Tailscale IPv4 address")?;
-    let gate = tailscale::Gate::new(&status)?;
-    let state = state::AppState::new(me.host_name.clone(), ip, gate, args.web_dir.clone());
+    let ip = status.self_node.as_ref().and_then(|n| n.ipv4()).context("no Tailscale IPv4 address")?;
+    let state = state::AppState::new(status, ip, args.web_dir.clone())?;
 
     let app = server::router(state.clone());
     let mut servers = Vec::new();
@@ -87,8 +84,8 @@ async fn main() -> Result<()> {
         servers.push(tokio::spawn(async move { axum::serve(listener, app).await }));
     }
     tracing::info!(
-        "Connect host ready: http://{}:{} (web client from {})",
-        me.host_name,
+        "Conductor host ready: http://{}:{} (web client from {})",
+        state.dns_label,
         args.port,
         args.web_dir.display()
     );

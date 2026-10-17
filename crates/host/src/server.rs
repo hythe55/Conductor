@@ -9,8 +9,8 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use connect_proto::{HostInfo, PROTOCOL_VERSION, SessionRequest, SessionResponse};
-use tower_http::cors::CorsLayer;
+use conductor_proto::{Device, HostInfo, PROTOCOL_VERSION, SessionRequest, SessionResponse};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::session;
@@ -22,12 +22,14 @@ const APP_ORIGINS: &[&str] =
 
 pub fn router(state: Arc<AppState>) -> Router {
     let index = state.web_dir.join("index.html");
+    let origins = state.clone();
     let cors = CorsLayer::new()
-        .allow_origin(APP_ORIGINS.iter().map(|o| HeaderValue::from_static(o)).collect::<Vec<_>>())
+        .allow_origin(AllowOrigin::predicate(move |origin: &HeaderValue, _| origin_allowed(&origins, origin)))
         .allow_methods([Method::GET, Method::POST])
         .allow_headers([header::CONTENT_TYPE]);
     Router::new()
         .route("/api/info", get(info))
+        .route("/api/devices", get(devices))
         .route("/api/session", post(create_session))
         .fallback_service(ServeDir::new(&state.web_dir).fallback(ServeFile::new(index)))
         .layer(cors)
@@ -61,17 +63,51 @@ async fn gate(
 }
 
 fn host_allowed(state: &AppState, host: &str) -> bool {
-    let name = state.name.to_ascii_lowercase();
     host == "localhost"
         || host == "127.0.0.1"
         || host == "::1"
         || host == state.tailscale_ip.to_string()
-        || host == name
-        || host.strip_prefix(&name).is_some_and(|rest| rest.starts_with('.') && rest.ends_with(".ts.net"))
+        || host == state.dns_label
+        || host == state.fqdn
+}
+
+/// Browsers may call this API from the Conductor app itself or from the web
+/// client served by any of the owner's machines. Everything else (including
+/// arbitrary websites open on a tailnet device) is refused.
+fn origin_allowed(state: &AppState, origin: &HeaderValue) -> bool {
+    let Ok(origin) = origin.to_str() else { return false };
+    if APP_ORIGINS.contains(&origin) {
+        return true;
+    }
+    let Some(rest) = origin.strip_prefix("http://").or_else(|| origin.strip_prefix("https://")) else {
+        return false;
+    };
+    let host = match rest.rsplit_once(':') {
+        Some((h, port)) if port.chars().all(|c| c.is_ascii_digit()) => h,
+        _ => rest,
+    };
+    let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => is_tailscale_ip(ip),
+        Err(_) => state.is_tailnet_name(&host),
+    }
+}
+
+fn is_tailscale_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        // 100.64.0.0/10 (CGNAT range Tailscale assigns from).
+        std::net::IpAddr::V4(v4) => v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64,
+        // fd7a:115c:a1e0::/48
+        std::net::IpAddr::V6(v6) => v6.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0],
+    }
 }
 
 async fn info(State(state): State<Arc<AppState>>) -> Json<HostInfo> {
     Json(host_info(&state))
+}
+
+async fn devices(State(state): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>) -> Json<Vec<Device>> {
+    Json(state.devices(peer.ip()).await)
 }
 
 pub fn host_info(state: &AppState) -> HostInfo {
@@ -99,5 +135,20 @@ async fn create_session(
             tracing::warn!("session setup failed: {e:#}");
             Err((StatusCode::BAD_REQUEST, format!("{e:#}")))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tailscale_ranges() {
+        assert!(is_tailscale_ip("100.101.102.103".parse().unwrap()));
+        assert!(is_tailscale_ip("100.64.0.1".parse().unwrap()));
+        assert!(!is_tailscale_ip("100.128.0.1".parse().unwrap()));
+        assert!(!is_tailscale_ip("192.168.1.10".parse().unwrap()));
+        assert!(is_tailscale_ip("fd7a:115c:a1e0::1".parse().unwrap()));
+        assert!(!is_tailscale_ip("fd00::1".parse().unwrap()));
     }
 }

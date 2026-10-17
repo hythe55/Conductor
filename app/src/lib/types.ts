@@ -19,6 +19,18 @@ export interface HostInfo {
   displays: DisplayInfo[]
 }
 
+export interface Device {
+  id: string
+  name: string
+  dnsName: string
+  address: string
+  os: string
+  online: boolean
+  host: HostInfo | null
+  isSelf: boolean
+  isYou: boolean
+}
+
 export type MouseButton = 'left' | 'right' | 'middle' | 'back' | 'forward'
 
 export type ClientMsg =

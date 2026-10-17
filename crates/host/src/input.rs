@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 
-use connect_proto::MouseButton;
+use conductor_proto::MouseButton;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 

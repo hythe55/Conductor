@@ -4,7 +4,7 @@
 //! changed, so an idle desktop costs nothing to capture.
 
 use anyhow::{Context, Result, bail};
-use connect_proto::DisplayInfo;
+use conductor_proto::DisplayInfo;
 use windows::Win32::Foundation::{HMODULE, LUID};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::*;

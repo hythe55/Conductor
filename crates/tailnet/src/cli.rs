@@ -81,15 +81,52 @@ pub struct UserProfile {
     pub login_name: String,
 }
 
+/// `tailscale whois` returns a raw control-plane node, which is shaped
+/// differently from the nodes in `tailscale status`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct WhoIs {
-    node: Option<Node>,
+    node: Option<WhoIsNode>,
     user_profile: Option<UserProfile>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WhoIsNode {
+    #[serde(rename = "User", default)]
+    user: i64,
 }
 
 pub async fn status() -> Result<Status> {
     run_json(&["status", "--json"]).await
+}
+
+impl Status {
+    pub fn is_running(&self) -> bool {
+        self.backend_state == "Running" && self.self_node.is_some()
+    }
+
+    /// The tailnet user that owns this machine.
+    pub fn owner(&self) -> Option<i64> {
+        self.self_node.as_ref().map(|n| n.user_id)
+    }
+}
+
+impl Node {
+    pub fn ipv4(&self) -> Option<IpAddr> {
+        self.tailscale_ips.iter().copied().find(IpAddr::is_ipv4)
+    }
+
+    /// MagicDNS name without the trailing dot.
+    pub fn fqdn(&self) -> &str {
+        self.dns_name.trim_end_matches('.')
+    }
+
+    /// Short machine name as MagicDNS resolves it (lowercase, first label).
+    pub fn short_name(&self) -> String {
+        let fqdn = self.fqdn();
+        let label = fqdn.split('.').next().filter(|l| !l.is_empty()).unwrap_or(&self.host_name);
+        label.to_ascii_lowercase()
+    }
 }
 
 /// Decides whether a peer may connect: it must belong to the same tailnet
@@ -101,7 +138,7 @@ pub struct Gate {
 
 impl Gate {
     pub fn new(status: &Status) -> Result<Self> {
-        let owner = status.self_node.as_ref().context("tailscale has no self node")?.user_id;
+        let owner = status.owner().context("tailscale has no self node")?;
         Ok(Self { owner, cache: Mutex::new(HashMap::new()) })
     }
 
@@ -116,7 +153,7 @@ impl Gate {
         }
         let ok = match run_json::<WhoIs>(&["whois", "--json", &ip.to_string()]).await {
             Ok(w) => {
-                let user = w.user_profile.map(|u| u.id).or(w.node.map(|n| n.user_id));
+                let user = w.user_profile.map(|u| u.id).or(w.node.map(|n| n.user));
                 user == Some(self.owner)
             }
             Err(e) => {
@@ -126,5 +163,18 @@ impl Gate {
         };
         self.cache.lock().unwrap().insert(ip, (ok, Instant::now()));
         ok
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_whois() {
+        let json = r#"{"Node":{"ID":1,"Name":"pc.tail.ts.net.","User":42},"UserProfile":{"ID":42,"LoginName":"x"},"CapMap":null}"#;
+        let w: WhoIs = serde_json::from_str(json).unwrap();
+        assert_eq!(w.user_profile.unwrap().id, 42);
+        assert_eq!(w.node.unwrap().user, 42);
     }
 }

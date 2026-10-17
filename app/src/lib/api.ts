@@ -1,4 +1,4 @@
-import type { HostInfo } from './types'
+import type { Device, HostInfo } from './types'
 
 /** Base URL of a host's API. Empty string means the host serving this page. */
 export type HostUrl = string
@@ -17,6 +17,19 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 export function hostInfo(host: HostUrl): Promise<HostInfo> {
   return request(`${host}/api/info`)
+}
+
+export function devices(host: HostUrl): Promise<Device[]> {
+  return request(`${host}/api/devices`)
+}
+
+const PORT = 4280
+
+/** Where to reach a device's API from this page. */
+export function deviceUrl(d: Device): HostUrl {
+  // The host serving this page is reachable at the page's own origin.
+  if (d.isSelf && location.port === String(PORT)) return ''
+  return `http://${d.address}:${PORT}`
 }
 
 export interface SessionOptions {

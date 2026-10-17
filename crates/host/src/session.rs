@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use connect_proto::{ClientMsg, HostMsg};
+use conductor_proto::{ClientMsg, HostMsg};
 use str0m::bwe::{Bitrate, BweKind};
 use str0m::change::SdpOffer;
 use str0m::channel::ChannelId;
