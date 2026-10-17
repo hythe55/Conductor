@@ -12,6 +12,7 @@ use anyhow::Result;
 use tokio::sync::mpsc as tmpsc;
 use windows::Win32::Foundation::LUID;
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
+use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 
 use crate::capture::{Capture, Frame, ResolutionChanged};
 use crate::convert::{Converter, fit};
@@ -92,7 +93,7 @@ fn run(
     stop: &std::sync::atomic::AtomicBool,
 ) -> Result<()> {
     unsafe {
-        _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED);
+        _ = CoInitializeEx(None, COINIT_MULTITHREADED);
     }
     crate::encoder::startup()?;
     let start = Instant::now();
@@ -254,9 +255,7 @@ impl Opening {
         let device = device.clone();
         let (fps, bitrate, profile) = (config.fps, config.bitrate, config.profile);
         std::thread::spawn(move || {
-            unsafe {
-                _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED);
-            }
+            unsafe { _ = CoInitializeEx(None, COINIT_MULTITHREADED) };
             _ = tx.send(Encoder::new(&device, luid, size.0, size.1, fps, bitrate, profile));
         });
         Self { bitrate, started: Instant::now(), rx }
@@ -266,7 +265,8 @@ impl Opening {
 /// Whether an encoder running at `current` should be restarted to reach `wanted`.
 fn restart_due(current: u32, wanted: u32, since_last: Duration) -> bool {
     let ratio = wanted as f64 / current as f64;
-    (ratio < RESTART_BELOW && since_last >= RESTART_DOWN_AFTER) || (ratio > RESTART_ABOVE && since_last >= RESTART_UP_AFTER)
+    (ratio < RESTART_BELOW && since_last >= RESTART_DOWN_AFTER)
+        || (ratio > RESTART_ABOVE && since_last >= RESTART_UP_AFTER)
 }
 
 /// Counts what the pipeline did, logged every few seconds at debug level.
