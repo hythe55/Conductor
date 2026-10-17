@@ -32,9 +32,26 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/devices", get(devices))
         .route("/api/session", post(create_session))
         .fallback_service(ServeDir::new(&state.web_dir).fallback(ServeFile::new(index)))
+        .layer(middleware::from_fn(revalidate_pages))
         .layer(cors)
         .layer(middleware::from_fn_with_state(state.clone(), gate))
         .with_state(state)
+}
+
+/// Scripts and styles are named by content hash and fine to cache, but the page
+/// that links them has to be checked each time, or after an update browsers keep
+/// loading the old client.
+async fn revalidate_pages(req: Request, next: Next) -> Response {
+    let mut res = next.run(req).await;
+    let is_page = res
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|t| t.starts_with("text/html"));
+    if is_page {
+        res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    }
+    res
 }
 
 /// Only this tailnet user's devices (and localhost) get in. The Host header
