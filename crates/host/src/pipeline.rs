@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use tokio::sync::mpsc as tmpsc;
 use windows::Win32::Foundation::LUID;
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
@@ -17,6 +17,8 @@ use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use crate::capture::{Capture, Frame, ResolutionChanged};
 use crate::convert::{Converter, fit};
 use crate::encoder::{EncodedFrame, Encoder, Profile};
+use crate::indicator::Area;
+use crate::window;
 
 /// Frames re-sent after motion stops so the encoder can sharpen the image.
 const REFINE_FRAMES: u32 = 4;
@@ -29,6 +31,13 @@ const RESTART_BELOW: f64 = 0.75;
 const RESTART_ABOVE: f64 = 1.5;
 const RESTART_DOWN_AFTER: Duration = Duration::from_secs(1);
 const RESTART_UP_AFTER: Duration = Duration::from_secs(5);
+/// How often a shown window is checked for having moved.
+const FOLLOW_EVERY: Duration = Duration::from_millis(100);
+/// A shown window that changed size or display is shown again once it has
+/// stayed put this long, rather than restarting the encoder all through a drag.
+const SETTLE: Duration = Duration::from_millis(300);
+/// How long a window being restored from the taskbar gets to come back.
+const RESTORE_WAIT: Duration = Duration::from_secs(1);
 
 pub enum Control {
     Keyframe,
@@ -37,6 +46,8 @@ pub enum Control {
 
 pub struct Config {
     pub display: Option<String>,
+    /// Show only this window, from the display most of it is on.
+    pub window: Option<window::Handle>,
     pub max_size: (u32, u32),
     pub fps: u32,
     pub bitrate: u32,
@@ -45,7 +56,21 @@ pub struct Config {
 
 pub enum PipelineEvent {
     Frame(EncodedFrame),
-    Started { display: String, width: u32, height: u32, encoder: String, origin: (i32, i32), size: (u32, u32) },
+    /// `origin` and `size` are the display's, and `view` the part of it shown:
+    /// all of it, or the area of `window`. A window that closed is replaced by
+    /// its display, with `window` unset.
+    Started {
+        display: String,
+        width: u32,
+        height: u32,
+        encoder: String,
+        origin: (i32, i32),
+        size: (u32, u32),
+        view: Area,
+        window: Option<window::Handle>,
+    },
+    /// The shown window moved, without changing size or display.
+    Moved { view: Area },
     Failed(String),
 }
 
@@ -98,11 +123,30 @@ fn run(
     crate::encoder::startup()?;
     let start = Instant::now();
 
-    // Rebuilt from scratch when the display mode changes.
+    // Rebuilt from scratch when the display mode changes, or the shown window
+    // changes size or display.
     while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+        let placed = config.window.and_then(|w| place(w, stop));
+        match &placed {
+            Some((display, _)) => config.display = Some(display.clone()),
+            None if config.window.is_some() => {
+                tracing::info!("the shown window closed, or was hidden or minimized; showing its display");
+                config.window = None;
+            }
+            None => {}
+        }
         let mut cap = Capture::new(config.display.as_deref())?;
-        let size = fit((cap.width, cap.height), config.max_size);
-        let mut conv = Converter::new(&cap.device, &cap.context, &cap.texture, (cap.width, cap.height), size)?;
+        let screen = Area { x: cap.origin.0, y: cap.origin.1, width: cap.width, height: cap.height };
+        let mut view = match placed {
+            Some((_, view)) if contains(screen, view) => view,
+            _ => {
+                config.window = None;
+                screen
+            }
+        };
+        let size = fit((view.width, view.height), config.max_size);
+        let mut conv =
+            Converter::new(&cap.device, &cap.context, &cap.texture, (cap.width, cap.height), within(view, screen), size)?;
         let mut enc = Encoder::new(&cap.device, cap.luid, size.0, size.1, config.fps, config.bitrate, config.profile)?;
         let mut enc_bitrate = config.bitrate;
         let mut last_restart = Instant::now();
@@ -114,6 +158,8 @@ fn run(
             encoder: enc.name.clone(),
             origin: cap.origin,
             size: (cap.width, cap.height),
+            view,
+            window: config.window,
         });
 
         let frame_interval = Duration::from_secs_f64(1.0 / config.fps as f64);
@@ -127,11 +173,39 @@ fn run(
         let mut last_submit = Instant::now() - frame_interval;
         let mut refine_left = 0u32;
         let mut dirty = false;
+        let mut followed = Instant::now();
+        // A different place the shown window has been seen at, and since when.
+        let mut settling: Option<(Option<Area>, Instant)> = None;
 
         let mut stats = Stats::new();
         let result: Result<()> = (|| {
             while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                 stats.report();
+                if let Some(w) = config.window
+                    && followed.elapsed() >= FOLLOW_EVERY
+                {
+                    followed = Instant::now();
+                    match window::rect(w).and_then(|r| window::crop(r, screen)) {
+                        Some(now) if (now.width, now.height) == (view.width, view.height) => {
+                            settling = None;
+                            if now != view {
+                                view = now;
+                                conv.set_crop(within(view, screen));
+                                dirty = true;
+                                _ = out.try_send(PipelineEvent::Moved { view });
+                            }
+                        }
+                        // Resized, moved to another display, minimized, hidden or closed.
+                        now => match settling {
+                            Some((seen, since)) if seen == now => {
+                                if since.elapsed() >= SETTLE {
+                                    bail!(ViewChanged);
+                                }
+                            }
+                            _ => settling = Some((now, Instant::now())),
+                        },
+                    }
+                }
                 while let Ok(c) = control.try_recv() {
                     match c {
                         Control::Keyframe => want_key = true,
@@ -235,11 +309,51 @@ fn run(
                 drop(enc);
                 continue;
             }
+            Err(e) if e.is::<ViewChanged>() => {
+                tracing::debug!("the shown window changed size or display, restarting pipeline");
+                drop(enc);
+                continue;
+            }
             Err(e) => return Err(e),
         }
     }
     Ok(())
 }
+
+/// Finds the shown window's display and area, waiting a moment for one
+/// that's being restored from the taskbar.
+fn place(w: window::Handle, stop: &std::sync::atomic::AtomicBool) -> Option<(String, Area)> {
+    let until = Instant::now() + RESTORE_WAIT;
+    while window::minimized(w) && Instant::now() < until && !stop.load(std::sync::atomic::Ordering::Relaxed) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let displays = crate::capture::displays().ok()?;
+    window::place(w, &displays)
+}
+
+fn contains(outer: Area, inner: Area) -> bool {
+    inner.x >= outer.x
+        && inner.y >= outer.y
+        && inner.x + inner.width as i32 <= outer.x + outer.width as i32
+        && inner.y + inner.height as i32 <= outer.y + outer.height as i32
+}
+
+/// `view` relative to the display it's on, as the converter takes it.
+fn within(view: Area, screen: Area) -> (i32, i32, u32, u32) {
+    (view.x - screen.x, view.y - screen.y, view.width, view.height)
+}
+
+/// The shown window changed size or display, so the pipeline starts over.
+#[derive(Debug)]
+struct ViewChanged;
+
+impl std::fmt::Display for ViewChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the shown window changed size or display")
+    }
+}
+
+impl std::error::Error for ViewChanged {}
 
 /// A replacement encoder being opened on another thread. Opening one takes long
 /// enough (half a second for Intel's) to show as a stall if the stream waited.

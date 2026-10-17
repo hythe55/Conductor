@@ -6,7 +6,7 @@
   import { readClipboard, writeClipboard } from '../lib/platform'
   import { attachTouchInput } from '../lib/touch'
   import { Transfers } from '../lib/transfers.svelte'
-  import type { DisplayInfo, HostInfo, Route } from '../lib/types'
+  import type { DisplayInfo, HostInfo, Route, ShownWindow, WindowInfo } from '../lib/types'
   import Handle from '../components/Handle.svelte'
   import Keyboard from '../components/Keyboard.svelte'
   import ProblemText from '../components/ProblemText.svelte'
@@ -22,6 +22,7 @@
   const start = untrack(() => ({
     url,
     name: info.name,
+    version: info.version,
     displays: info.displays,
     display: info.displays.find((d) => d.primary)?.id ?? info.displays[0]?.id ?? '',
   }))
@@ -31,6 +32,16 @@
   let hasVideo = $state(false)
   let displays = $state<DisplayInfo[]>(start.displays)
   let activeDisplay = $state<string>(start.display)
+  // Hosts before 0.1.10 can only show whole displays.
+  const canShowWindows = atLeast(start.version, [0, 1, 10])
+  let shownWindow = $state<ShownWindow | null>(null)
+  // The windows open on the remote PC, while the menu lists them. Null until they arrive.
+  let windows = $state<WindowInfo[] | null>(null)
+  // The window asked for again after reconnecting, until the host answers.
+  let restoring: string | null = null
+  // Said on the handle for a moment when the shown window goes away.
+  let windowGoneNote = $state(false)
+  let windowGoneTimer: number | undefined
   let panelOpen = $state(false)
   let showStats = $state(false)
   let stats = $state<Stats | null>(null)
@@ -159,7 +170,21 @@
           error = null
           displays = msg.displays
           activeDisplay = msg.active
+          if (msg.window) restoring = null
+          // Until the window asked for after reconnecting is back, the menu keeps showing it.
+          if (!restoring) {
+            if (shownWindow && !msg.window) windowGone()
+            shownWindow = msg.window ?? null
+          }
           session.options.display = msg.active
+        } else if (msg.t === 'windows') {
+          windows = msg.windows
+          // The host lists the windows instead when the one asked for has closed.
+          if (restoring) {
+            restoring = null
+            shownWindow = null
+            windowGone()
+          }
         } else if (msg.t === 'error') {
           error = new Problem(`Couldn’t show the screen of ${info.name}. Try another display, or reconnect.`, msg.message)
         } else if (msg.t === 'clipboard') {
@@ -175,6 +200,11 @@
       onOpen() {
         session.send({ t: 'setAudio', enabled: sound })
         session.send({ t: 'hideScreen', hide: hideScreen })
+        // After reconnecting, the same window as before.
+        if (shownWindow) {
+          restoring = shownWindow.id
+          session.send({ t: 'selectWindow', id: shownWindow.id })
+        }
         void syncClipboard()
       },
     },
@@ -214,7 +244,8 @@
     const send = (m: Parameters<typeof session.send>[0]) => session.send(m)
     const detachDesktop = attachDesktopInput(surface, video, send, { localShortcut, onPaste: shareClipboard })
     const detachTouch = attachTouchInput(surface, video, pointer, send, {
-      displayWidth: () => displays.find((d) => d.id === activeDisplay)?.width || video.videoWidth || 1920,
+      displayWidth: () =>
+        shownWindow?.width || displays.find((d) => d.id === activeDisplay)?.width || video.videoWidth || 1920,
     })
     surface.focus()
     return () => {
@@ -334,11 +365,36 @@
   }
 
   function selectDisplay(id: string) {
-    if (id === activeDisplay) return
+    if (id === activeDisplay && !shownWindow) return
     activeDisplay = id
+    shownWindow = null
     session.options.display = id
     session.send({ t: 'selectDisplay', id })
     panelOpen = false
+  }
+
+  function windowGone() {
+    windowGoneNote = true
+    clearTimeout(windowGoneTimer)
+    windowGoneTimer = window.setTimeout(() => (windowGoneNote = false), 4000)
+  }
+
+  function listWindows() {
+    windows = null
+    session.send({ t: 'listWindows' })
+  }
+
+  function selectWindow(id: string) {
+    panelOpen = false
+    if (id !== shownWindow?.id) session.send({ t: 'selectWindow', id })
+  }
+
+  function atLeast(version: string, least: number[]) {
+    const parts = version.split('.').map((p) => parseInt(p, 10) || 0)
+    for (const [i, n] of least.entries()) {
+      if ((parts[i] ?? 0) !== n) return (parts[i] ?? 0) > n
+    }
+    return true
   }
 
   async function toggleFullscreen() {
@@ -368,6 +424,7 @@
 
   onDestroy(() => {
     clearTimeout(relayTimer)
+    clearTimeout(windowGoneTimer)
     soundLater?.abort()
     transfers.stop()
     session.close()
@@ -380,7 +437,9 @@
   // What the handle says, most important first.
   const notice = $derived.by(() => {
     if (hasVideo && error) return { chip: 'Can’t show this display', problem: error, warning: true }
-    return transfers.notice ?? (relayedNote ? { chip: 'Relayed connection' } : null)
+    if (transfers.notice) return transfers.notice
+    if (windowGoneNote) return { chip: 'Window closed or minimized' }
+    return relayedNote ? { chip: 'Relayed connection' } : null
   })
 </script>
 
@@ -488,12 +547,16 @@
       copiedFiles={transfers.copied?.files.length ?? 0}
       {displays}
       {activeDisplay}
+      {shownWindow}
+      {windows}
       {fullscreen}
       {showStats}
       {sound}
       pc={info.name}
       {hideScreen}
       onselectdisplay={selectDisplay}
+      onlistwindows={canShowWindows ? listWindows : undefined}
+      onselectwindow={selectWindow}
       ontogglefullscreen={toggleFullscreen}
       ontogglestats={() => (showStats = !showStats)}
       ontogglesound={toggleSound}

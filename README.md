@@ -2,7 +2,7 @@
 
 Control your Windows PCs from your other devices, over your own [Tailscale](https://tailscale.com) network. There are no accounts and no servers in the middle: every PC you install Conductor on can be seen and controlled by your other devices on the same tailnet, and by nobody else.
 
-- Full keyboard and mouse control, on every display
+- Full keyboard and mouse control, on every display, or on just one window
 - Works at the sign-in screen, the lock screen, and on UAC prompts
 - Hardware video encoding with low latency, and adapts to the connection
 - Sound from the PC you're controlling

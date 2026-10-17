@@ -2,6 +2,7 @@
   // One line-icon set for the whole app: 16px, 1.5px strokes in the text color.
   const paths = {
     back: 'M10 3.5 5.5 8l4.5 4.5',
+    forward: 'M6 3.5 10.5 8 6 12.5',
     check: 'M3.5 8.5 6.5 11.5 12.5 4.5',
     more: 'M3.5 8h.01M8 8h.01M12.5 8h.01',
   }

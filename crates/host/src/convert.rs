@@ -21,11 +21,13 @@ pub struct Converter {
 }
 
 impl Converter {
+    /// Scales the `crop` part of `source` (left, top, width, height) to the output size.
     pub fn new(
         device: &ID3D11Device,
         context: &ID3D11DeviceContext,
         source: &ID3D11Texture2D,
         (in_w, in_h): (u32, u32),
+        crop: (i32, i32, u32, u32),
         (out_w, out_h): (u32, u32),
     ) -> Result<Self> {
         let vdev: ID3D11VideoDevice = device.cast().context("no video device")?;
@@ -76,14 +78,20 @@ impl Converter {
             }
             vctx.VideoProcessorSetStreamFrameFormat(&vp, 0, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE);
             vctx.VideoProcessorSetStreamAutoProcessingMode(&vp, 0, false);
-            let src = RECT { left: 0, top: 0, right: in_w as i32, bottom: in_h as i32 };
             let dst = RECT { left: 0, top: 0, right: out_w as i32, bottom: out_h as i32 };
-            vctx.VideoProcessorSetStreamSourceRect(&vp, 0, true, Some(&src));
             vctx.VideoProcessorSetStreamDestRect(&vp, 0, true, Some(&dst));
             vctx.VideoProcessorSetOutputTargetRect(&vp, true, Some(&dst));
         }
 
-        Ok(Self { vctx, vp, input, outputs, next: 0 })
+        let conv = Self { vctx, vp, input, outputs, next: 0 };
+        conv.set_crop(crop);
+        Ok(conv)
+    }
+
+    /// Moves the part of the source that's shown, keeping its size.
+    pub fn set_crop(&self, (x, y, w, h): (i32, i32, u32, u32)) {
+        let src = RECT { left: x, top: y, right: x + w as i32, bottom: y + h as i32 };
+        unsafe { self.vctx.VideoProcessorSetStreamSourceRect(&self.vp, 0, true, Some(&src)) };
     }
 
     /// Converts the source texture into the next NV12 texture and returns it.

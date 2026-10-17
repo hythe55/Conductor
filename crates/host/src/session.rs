@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use conductor_proto::{COPIED_CHANNEL, ClientMsg, FILE_CHANNEL, FileReply, HostMsg, Route};
+use conductor_proto::{COPIED_CHANNEL, ClientMsg, FILE_CHANNEL, FileReply, HostMsg, Route, ShownWindow};
 use str0m::bwe::{Bitrate, BweKind};
 use str0m::change::SdpOffer;
 use str0m::channel::ChannelId;
@@ -28,6 +28,7 @@ use crate::power::KeepAwake;
 use crate::input::Injector;
 use crate::pipeline::{Config, Control, Pipeline, PipelineEvent};
 use crate::state::AppState;
+use crate::window;
 
 const START_BITRATE: u32 = 8_000_000;
 const MIN_BITRATE: u32 = 500_000;
@@ -116,6 +117,8 @@ struct Session {
     events_tx: mpsc::Sender<PipelineEvent>,
     injector: Injector,
     display: Option<String>,
+    /// The one window shown instead of the whole display.
+    window: Option<window::Handle>,
     controller: String,
     banner: Option<Banner>,
     /// Cover this PC's displays while the session lasts.
@@ -175,6 +178,7 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params, mut route_rx: mpsc::Re
         events_tx,
         injector: Injector::new(),
         display: params.display,
+        window: None,
         controller: params.controller,
         banner: None,
         hide_screen: false,
@@ -411,6 +415,7 @@ impl Session {
         self.pipeline = Some(Pipeline::start(
             Config {
                 display: self.display.clone(),
+                window: self.window,
                 max_size: self.max_size,
                 fps: 60,
                 bitrate: self.bitrate,
@@ -450,11 +455,22 @@ impl Session {
             ClientMsg::Text { text } => self.injector.text(&text),
             ClientMsg::ReleaseAll => self.injector.release_all(),
             ClientMsg::SelectDisplay { id } => {
-                if self.display.as_deref() != Some(id.as_str()) {
+                if self.display.as_deref() != Some(id.as_str()) || self.window.is_some() {
                     self.display = Some(id);
+                    self.window = None;
                     self.restart_pipeline();
                 }
             }
+            ClientMsg::SelectWindow { id } => match window::from_id(&id) {
+                Some(w) => {
+                    window::bring_forward(w);
+                    self.window = Some(w);
+                    self.restart_pipeline();
+                }
+                // Closed since it was listed.
+                None => self.send(&HostMsg::Windows { windows: window::list() }),
+            },
+            ClientMsg::ListWindows => self.send(&HostMsg::Windows { windows: window::list() }),
             ClientMsg::RequestKeyframe => {
                 if let Some(p) = &self.pipeline {
                     p.send(Control::Keyframe);
@@ -540,19 +556,30 @@ impl Session {
                 self.stats.written += f.data.len() as u64;
                 w.playout_delay(zero, zero).write(pt, Instant::now(), rtp, f.data)?;
             }
-            PipelineEvent::Started { display, width, height, encoder, origin, size } => {
+            PipelineEvent::Started { display, width, height, encoder, origin, size, view, window } => {
                 let id = display.clone();
-                tracing::info!("streaming {id} at {width}x{height} via {encoder}");
-                self.injector.set_display(origin, size);
+                match window {
+                    Some(_) => tracing::info!("streaming a window on {id} at {width}x{height} via {encoder}"),
+                    None => tracing::info!("streaming {id} at {width}x{height} via {encoder}"),
+                }
+                self.injector.set_display((view.x, view.y), (view.width, view.height));
                 if let Some(b) = &self.banner {
                     b.set_area(Area { x: origin.0, y: origin.1, width: size.0, height: size.1 });
                 }
                 self.display = Some(display.clone());
+                self.window = window;
                 self.failures = 0;
                 self.retry_after = RETRY_FIRST;
                 let displays = crate::capture::displays().unwrap_or_default();
-                self.send(&HostMsg::Displays { displays, active: display });
+                let window = window.and_then(window::info).map(|w| ShownWindow {
+                    id: w.id,
+                    title: w.title,
+                    width: view.width,
+                    height: view.height,
+                });
+                self.send(&HostMsg::Displays { displays, active: display, window });
             }
+            PipelineEvent::Moved { view } => self.injector.set_display((view.x, view.y), (view.width, view.height)),
             PipelineEvent::Failed(message) => {
                 self.pipeline = None;
                 self.failures += 1;

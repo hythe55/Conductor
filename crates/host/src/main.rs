@@ -30,6 +30,7 @@ mod spawn;
 mod state;
 mod update;
 mod wake;
+mod window;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;

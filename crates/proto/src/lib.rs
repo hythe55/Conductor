@@ -160,6 +160,25 @@ pub struct DisplayInfo {
     pub is_virtual: bool,
 }
 
+/// An app's window that a session can show on its own.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowInfo {
+    /// Valid until the window closes.
+    pub id: String,
+    pub title: String,
+}
+
+/// The window a session shows, and the size of the part of the screen it covers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShownWindow {
+    pub id: String,
+    pub title: String,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// A machine on the tailnet that Conductor can show on the device list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -253,6 +272,11 @@ pub enum ClientMsg {
     ReleaseAll,
     #[serde(rename_all = "camelCase")]
     SelectDisplay { id: String },
+    /// Show only this window, from the display it's on. Hosts from 0.1.10.
+    #[serde(rename_all = "camelCase")]
+    SelectWindow { id: String },
+    /// Asks for the windows open on this PC, answered with [`HostMsg::Windows`].
+    ListWindows,
     RequestKeyframe,
     /// Stop sending video while the client can't show it (minimized, screen off).
     #[serde(rename_all = "camelCase")]
@@ -276,7 +300,16 @@ pub enum HostMsg {
     #[serde(rename_all = "camelCase")]
     Hello { host: HostInfo, display: String },
     #[serde(rename_all = "camelCase")]
-    Displays { displays: Vec<DisplayInfo>, active: String },
+    Displays {
+        displays: Vec<DisplayInfo>,
+        active: String,
+        /// Set while the session shows one window from `active`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window: Option<ShownWindow>,
+    },
+    /// The windows open on this PC, frontmost first.
+    #[serde(rename_all = "camelCase")]
+    Windows { windows: Vec<WindowInfo> },
     #[serde(rename_all = "camelCase")]
     Stats { bitrate_kbps: u32, fps: u32, width: u32, height: u32, encoder: String },
     #[serde(rename_all = "camelCase")]

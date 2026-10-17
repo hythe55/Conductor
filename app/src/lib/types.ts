@@ -11,6 +11,18 @@ export interface DisplayInfo {
   virtual: boolean
 }
 
+/** A window open on the remote PC. The id lasts until it closes. */
+export interface WindowInfo {
+  id: string
+  title: string
+}
+
+/** The window a session shows, and its size in the picture. */
+export interface ShownWindow extends WindowInfo {
+  width: number
+  height: number
+}
+
 export interface HostInfo {
   name: string
   version: string
@@ -84,6 +96,9 @@ export type ClientMsg =
   | { t: 'text'; text: string }
   | { t: 'releaseAll' }
   | { t: 'selectDisplay'; id: string }
+  /** Show only this window. Hosts from 0.1.10. */
+  | { t: 'selectWindow'; id: string }
+  | { t: 'listWindows' }
   | { t: 'requestKeyframe' }
   | { t: 'setPaused'; paused: boolean }
   | { t: 'clipboard'; text: string }
@@ -93,7 +108,9 @@ export type ClientMsg =
 
 export type HostMsg =
   | { t: 'hello'; host: HostInfo; display: string }
-  | { t: 'displays'; displays: DisplayInfo[]; active: string }
+  | { t: 'displays'; displays: DisplayInfo[]; active: string; window?: ShownWindow }
+  /** The windows open on the remote PC, frontmost first. */
+  | { t: 'windows'; windows: WindowInfo[] }
   | { t: 'stats'; bitrateKbps: number; fps: number; width: number; height: number; encoder: string }
   | { t: 'error'; message: string }
   | { t: 'clipboard'; text: string }
