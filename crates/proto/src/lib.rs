@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod files;
+
 /// Default TCP port for the host's HTTP API and web client.
 pub const DEFAULT_PORT: u16 = 4280;
 
@@ -206,6 +208,30 @@ pub enum HostMsg {
     /// The pointer changed shape. A CSS cursor value, `none` when it's hidden.
     #[serde(rename_all = "camelCase")]
     Cursor { name: String },
+}
+
+/// Label of the data channels that carry files from the client, one file each.
+pub const FILE_CHANNEL: &str = "file";
+
+/// First message on a file channel, as text. The file's bytes follow as binary messages.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileHeader {
+    /// The file's name on the client, without its folder.
+    pub name: String,
+    pub size: u64,
+}
+
+/// The host's answer on a file channel, after which the client closes it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "camelCase")]
+pub enum FileReply {
+    /// Saved in the Downloads folder under this name, which may differ from
+    /// the one sent when a file of that name was already there.
+    #[serde(rename_all = "camelCase")]
+    Saved { name: String },
+    #[serde(rename_all = "camelCase")]
+    Failed { message: String },
 }
 
 #[cfg(test)]

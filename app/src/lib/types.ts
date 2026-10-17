@@ -70,3 +70,6 @@ export type HostMsg =
   | { t: 'error'; message: string }
   | { t: 'clipboard'; text: string }
   | { t: 'cursor'; name: string }
+
+/** The host's answer on a file channel. */
+export type FileReply = { t: 'saved'; name: string } | { t: 'failed'; message: string }

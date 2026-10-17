@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte'
-  import { Problem } from '../lib/errors'
+  import { Problem, toProblem } from '../lib/errors'
+  import { FILE_CHANNEL, SaveError, sendFile } from '../lib/files'
   import { attachDesktopInput } from '../lib/input'
   import { RemoteSession, type SessionState, type Stats } from '../lib/session'
   import { readClipboard, writeClipboard } from '../lib/platform'
@@ -16,6 +17,7 @@
   let surface: HTMLDivElement
   let pointer: HTMLDivElement
   let keyboard: Keyboard
+  let picker: HTMLInputElement
   // The view is created per connection, so the initial props are all it needs.
   const start = untrack(() => ({
     url,
@@ -39,6 +41,138 @@
   let viewHeight = $state<number | null>(null)
 
   const coarse = window.matchMedia('(pointer: coarse)').matches
+
+  // Files go to the Downloads folder on the remote PC, one after another.
+  let queue: File[] = []
+  let sending = $state<{ files: number; current: number; total: number; done: number } | null>(null)
+  let stopSending: AbortController | null = null
+  // Folders dropped with the files, which can't be sent.
+  let skippedFolders = 0
+  // How the last batch ended, shown for a moment.
+  let finished = $state<string | null>(null)
+  let finishedTimer: number | undefined
+  let sendProblem = $state<{ chip: string; problem: Problem } | null>(null)
+  let dragging = $state(false)
+  let dragDepth = 0
+
+  const folderProblem = () => ({
+    chip: 'Folders weren’t sent',
+    problem: new Problem('To send a folder, zip it first or send the files in it.'),
+  })
+
+  function sendFiles(files: File[], folders = 0) {
+    clearTimeout(finishedTimer)
+    finished = null
+    sendProblem = null
+    skippedFolders += folders
+    if (!files.length) {
+      if (!sending && skippedFolders) {
+        sendProblem = folderProblem()
+        skippedFolders = 0
+      }
+      return
+    }
+    queue.push(...files)
+    const size = files.reduce((n, f) => n + f.size, 0)
+    if (sending) {
+      sending.files += files.length
+      sending.total += size
+    } else {
+      sending = { files: files.length, current: 1, total: size, done: 0 }
+      void sendQueue()
+    }
+  }
+
+  async function sendQueue() {
+    const stop = new AbortController()
+    stopSending = stop
+    // Bytes of the files already sent, and how many there were.
+    let before = 0
+    let count = 0
+    let file: File | undefined
+    try {
+      while ((file = queue.shift())) {
+        if (sending) sending.current = count + 1
+        const channel = session.openChannel(FILE_CHANNEL)
+        if (!channel) throw new Problem(`Couldn’t send ${file.name}. ${info.name} isn’t connected right now.`)
+        const start = before
+        await sendFile(channel, file, (bytes) => sending && (sending.done = start + bytes), stop.signal)
+        before += file.size
+        count++
+      }
+      if (skippedFolders) sendProblem = folderProblem()
+      else showFinished('Sent to Downloads')
+    } catch (e) {
+      const total = count + 1 + queue.length
+      queue = []
+      if (stop.signal.aborted) {
+        showFinished(total === 1 ? 'Stopped sending' : `Stopped after ${count} of ${total} files`)
+      } else if (file) {
+        sendProblem = {
+          chip: `Couldn’t send ${file.name}`,
+          problem:
+            e instanceof SaveError
+              ? new Problem(`Couldn’t save ${file.name} on ${info.name}. Try sending it again.`, e.message)
+              : toProblem(e, `Couldn’t send ${file.name} to ${info.name}. Try sending it again.`),
+        }
+      }
+    } finally {
+      sending = null
+      stopSending = null
+      skippedFolders = 0
+    }
+  }
+
+  function showFinished(text: string) {
+    finished = text
+    finishedTimer = window.setTimeout(() => (finished = null), 4000)
+  }
+
+  // Files can be dropped while the remote screen is showing. The app stops
+  // other drops from opening the file in place of Conductor.
+  const canDrop = (e: DragEvent) => phase === 'connected' && (e.dataTransfer?.types.includes('Files') ?? false)
+
+  function onDragEnter(e: DragEvent) {
+    if (!canDrop(e)) return
+    e.preventDefault()
+    dragDepth++
+    dragging = true
+  }
+
+  function onDragOver(e: DragEvent) {
+    if (!canDrop(e)) return
+    e.preventDefault()
+    e.dataTransfer!.dropEffect = 'copy'
+  }
+
+  function onDragLeave() {
+    if (dragDepth > 0 && --dragDepth === 0) dragging = false
+  }
+
+  function onDrop(e: DragEvent) {
+    dragDepth = 0
+    dragging = false
+    if (!canDrop(e)) return
+    e.preventDefault()
+    const items = [...(e.dataTransfer?.items ?? [])]
+    const isFolder = (i: DataTransferItem) => !!i.webkitGetAsEntry?.()?.isDirectory
+    const files = items
+      .filter((i) => i.kind === 'file' && !isFolder(i))
+      .map((i) => i.getAsFile())
+      .filter((f): f is File => !!f)
+    sendFiles(files, items.filter(isFolder).length)
+  }
+
+  // A failed send has been dealt with once the menu that explains it closes.
+  let explained = false
+  $effect(() => {
+    if (panelOpen) {
+      if (sendProblem) explained = true
+    } else if (explained) {
+      explained = false
+      sendProblem = null
+    }
+  })
 
   // Clipboard text both devices have, and text copied there that couldn't be put on this device's clipboard yet.
   let sharedText: string | null = null
@@ -213,9 +347,31 @@
   const quality = $derived(
     phase === 'reconnecting' ? 'bad' : stats && stats.rttMs != null && stats.rttMs > 80 ? 'poor' : 'good',
   )
+
+  // What the handle says, most important first.
+  const notice = $derived.by(() => {
+    if (hasVideo && error) return { chip: 'Can’t show this display', problem: error, warning: true }
+    if (sendProblem) return { ...sendProblem, warning: true }
+    if (sending) {
+      return {
+        chip: sending.files === 1 ? 'Sending file…' : `Sending file ${sending.current} of ${sending.files}…`,
+        progress: sending.total ? Math.floor((sending.done / sending.total) * 100) : 0,
+      }
+    }
+    if (finished) return { chip: finished }
+    return null
+  })
 </script>
 
-<div class="stream" style:height={viewHeight ? `${viewHeight}px` : null}>
+<div
+  class="stream"
+  style:height={viewHeight ? `${viewHeight}px` : null}
+  role="presentation"
+  ondragenter={onDragEnter}
+  ondragover={onDragOver}
+  ondragleave={onDragLeave}
+  ondrop={onDrop}
+>
   <!-- Focus stays here for the whole session, so it has no outline: one would frame the remote screen. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div
@@ -252,6 +408,23 @@
 
   <Keyboard bind:this={keyboard} bind:open={keyboardOpen} send={(m) => session.send(m)} />
 
+  <input
+    bind:this={picker}
+    type="file"
+    multiple
+    hidden
+    onchange={() => {
+      sendFiles([...(picker.files ?? [])])
+      picker.value = ''
+    }}
+  />
+
+  {#if dragging}
+    <div class="drop">
+      <p>Drop to send to the Downloads folder on {info.name}</p>
+    </div>
+  {/if}
+
   {#if phase === 'failed'}
     <div class="notice" role="alert">
       <ProblemText problem={error ?? new Problem(`Lost the connection to ${info.name}.`)} />
@@ -285,7 +458,8 @@
       bind:open={panelOpen}
       {quality}
       reconnecting={phase === 'reconnecting'}
-      problem={hasVideo ? error : null}
+      {notice}
+      sending={!!sending}
       {displays}
       {activeDisplay}
       {fullscreen}
@@ -294,6 +468,8 @@
       ontogglefullscreen={toggleFullscreen}
       ontogglestats={() => (showStats = !showStats)}
       onkeyboard={coarse ? () => keyboard.show() : undefined}
+      onsendfiles={() => picker.click()}
+      onstopsending={() => stopSending?.abort()}
       ondisconnect={disconnect}
     />
   {/if}
@@ -382,6 +558,25 @@
 
   .actions .btn:not(.primary):hover {
     background: var(--overlay-hover);
+  }
+
+  .drop {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-6);
+    background: var(--overlay-scrim);
+    pointer-events: none;
+  }
+
+  .drop p {
+    margin: 0;
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius);
+    background: var(--overlay-solid);
+    text-align: center;
   }
 
   .stats {

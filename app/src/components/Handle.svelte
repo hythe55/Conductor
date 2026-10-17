@@ -5,12 +5,22 @@
   import type { Problem } from '../lib/errors'
   import type { DisplayInfo } from '../lib/types'
 
+  /** Status shown on the handle; a problem is explained at the top of the menu. */
+  interface Notice {
+    chip: string
+    /** Percent done, shown after the chip but not announced each time it changes. */
+    progress?: number
+    problem?: Problem
+    warning?: boolean
+  }
+
   interface Props {
     open: boolean
     quality: 'good' | 'poor' | 'bad'
     reconnecting: boolean
-    /** Something wrong with the picture, explained at the top of the menu. */
-    problem: Problem | null
+    notice: Notice | null
+    /** Files are on their way to the remote PC. */
+    sending: boolean
     displays: DisplayInfo[]
     activeDisplay: string
     fullscreen: boolean
@@ -20,6 +30,8 @@
     ontogglestats: () => void
     /** Opens the on-screen keyboard. Only given where there's no real one. */
     onkeyboard?: () => void
+    onsendfiles: () => void
+    onstopsending: () => void
     ondisconnect: () => void
   }
 
@@ -27,7 +39,8 @@
     open = $bindable(false),
     quality,
     reconnecting,
-    problem,
+    notice,
+    sending,
     displays,
     activeDisplay,
     fullscreen,
@@ -36,6 +49,8 @@
     ontogglefullscreen,
     ontogglestats,
     onkeyboard,
+    onsendfiles,
+    onstopsending,
     ondisconnect,
   }: Props = $props()
 
@@ -137,11 +152,12 @@
 
   // Focus moves into the menu when it opens. The session view takes it back when the menu closes.
   $effect(() => {
-    if (open) tick().then(() => items()[0]?.focus())
+    if (open) tick().then(() => panel?.querySelector<HTMLElement>('[role^="menuitem"]')?.focus())
   })
 
+  // The arrow keys also reach the details of a problem shown above the menu.
   function items(): HTMLElement[] {
-    return panel ? Array.from(panel.querySelectorAll<HTMLElement>('[role^="menuitem"]')) : []
+    return panel ? Array.from(panel.querySelectorAll<HTMLElement>('[role^="menuitem"], summary')) : []
   }
 
   function onPanelKey(e: KeyboardEvent) {
@@ -183,15 +199,17 @@
     return `${name}, ${d.width}×${d.height}`
   }
 
-  const chip = $derived(
+  const status = $derived<Notice | null>(
     reconnecting
-      ? 'Reconnecting…'
-      : problem
-        ? 'Can’t show this display'
-        : quality === 'poor'
-          ? 'Slow connection'
-          : null,
+      ? { chip: 'Reconnecting…', warning: true }
+      : (notice ?? (quality === 'poor' ? { chip: 'Slow connection', warning: true } : null)),
   )
+  const problem = $derived(notice?.problem ?? null)
+
+  // Show the handle when something new is going on, so the chip is seen.
+  $effect(() => {
+    if (notice) wake()
+  })
 </script>
 
 <svelte:window bind:innerWidth={windowWidth} />
@@ -204,7 +222,7 @@
 <!-- Touch screens can't bring the handle back by hovering, so there it dims instead of hiding. -->
 <div
   class="handle-area"
-  class:visible={awake || open || reconnecting || !!problem}
+  class:visible={awake || open || reconnecting || !!problem || sending}
   class:coarse
   style:left="{handleCenter}px"
   bind:offsetWidth={handleWidth}
@@ -215,6 +233,7 @@
     aria-expanded={open}
     aria-haspopup="menu"
     aria-label="Session menu"
+    aria-describedby="handle-status"
     title={coarse ? undefined : 'Session menu (Ctrl+Alt+Shift+M). Drag to move it.'}
     onpointerdown={onHandleDown}
     onpointermove={onHandleMove}
@@ -223,75 +242,86 @@
     onclick={onHandleClick}
     onfocus={wake}
   >
-    {#if chip}
-      <span class="chip">{chip}</span>
+    {#if status}
+      <span class="chip" class:warning={status.warning}
+        >{status.chip}{#if status.progress != null}<span aria-hidden="true">{` ${status.progress}%`}</span>{/if}</span
+      >
     {:else}
       <span class="grip" aria-hidden="true"></span>
     {/if}
   </button>
 </div>
-<span class="announce" aria-live="polite">{chip ?? ''}</span>
+<span class="announce" id="handle-status" aria-live="polite">{status?.chip ?? ''}</span>
 
 {#if open}
-  <!-- svelte-ignore a11y_interactive_supports_focus -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     bind:this={panel}
     bind:offsetWidth={panelWidth}
     class="panel"
     class:checks={displays.length > 1}
     style:left="{panelLeft}px"
-    role="menu"
-    aria-label="Session"
-    aria-describedby={problem ? 'session-problem' : undefined}
     onkeydown={onPanelKey}
   >
     {#if problem}
-      <div class="problem" id="session-problem"><ProblemText {problem} /></div>
+      <div class="problem" role="alert"><ProblemText {problem} /></div>
     {/if}
-    {#if displays.length > 1}
-      <div class="group" role="group" aria-label="Display">
-        {#each displays as d, i (d.id)}
-          <button
-            class="item"
-            role="menuitemradio"
-            aria-checked={d.id === activeDisplay}
-            tabindex="-1"
-            onclick={() => run(() => onselectdisplay(d.id))}
-          >
-            <span class="check">{#if d.id === activeDisplay}<Icon name="check" />{/if}</span>
-            <span class="text">{displayLabel(d, i)}</span>
+    <div role="menu" aria-label="Session">
+      {#if displays.length > 1}
+        <div class="group" role="group" aria-label="Display">
+          {#each displays as d, i (d.id)}
+            <button
+              class="item"
+              role="menuitemradio"
+              aria-checked={d.id === activeDisplay}
+              tabindex="-1"
+              onclick={() => run(() => onselectdisplay(d.id))}
+            >
+              <span class="check">{#if d.id === activeDisplay}<Icon name="check" />{/if}</span>
+              <span class="text">{displayLabel(d, i)}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+
+      <div class="group" role="group">
+        {#if onkeyboard}
+          <button class="item" role="menuitem" tabindex="-1" onclick={() => run(onkeyboard)}>
+            <span class="check"></span>
+            <span class="text">Keyboard</span>
           </button>
-        {/each}
+        {/if}
+        <button class="item" role="menuitem" tabindex="-1" onclick={() => run(onsendfiles)}>
+          <span class="check"></span>
+          <span class="text">{sending ? 'Send more files…' : 'Send files…'}</span>
+        </button>
+        {#if sending}
+          <button class="item" role="menuitem" tabindex="-1" onclick={() => run(onstopsending)}>
+            <span class="check"></span>
+            <span class="text">Stop sending files</span>
+          </button>
+        {/if}
+        {#if canFullscreen}
+          <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ontogglefullscreen)}>
+            <span class="check"></span>
+            <span class="text">{fullscreen ? 'Exit full screen' : 'Full screen'}</span>
+            {#if !coarse}<kbd>Ctrl+Alt+Shift+F</kbd>{/if}
+          </button>
+        {/if}
+        <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ontogglestats)}>
+          <span class="check"></span>
+          <span class="text">{showStats ? 'Hide connection details' : 'Show connection details'}</span>
+          {#if !coarse}<kbd>Ctrl+Alt+Shift+S</kbd>{/if}
+        </button>
       </div>
-    {/if}
 
-    <div class="group" role="group">
-      {#if onkeyboard}
-        <button class="item" role="menuitem" tabindex="-1" onclick={() => run(onkeyboard)}>
+      <div class="group" role="group">
+        <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ondisconnect)}>
           <span class="check"></span>
-          <span class="text">Keyboard</span>
+          <span class="text">Disconnect</span>
+          {#if !coarse}<kbd>Ctrl+Alt+Shift+Q</kbd>{/if}
         </button>
-      {/if}
-      {#if canFullscreen}
-        <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ontogglefullscreen)}>
-          <span class="check"></span>
-          <span class="text">{fullscreen ? 'Exit full screen' : 'Full screen'}</span>
-          {#if !coarse}<kbd>Ctrl+Alt+Shift+F</kbd>{/if}
-        </button>
-      {/if}
-      <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ontogglestats)}>
-        <span class="check"></span>
-        <span class="text">{showStats ? 'Hide connection details' : 'Show connection details'}</span>
-        {#if !coarse}<kbd>Ctrl+Alt+Shift+S</kbd>{/if}
-      </button>
-    </div>
-
-    <div class="group" role="group">
-      <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ondisconnect)}>
-        <span class="check"></span>
-        <span class="text">Disconnect</span>
-        {#if !coarse}<kbd>Ctrl+Alt+Shift+Q</kbd>{/if}
-      </button>
+      </div>
     </div>
   </div>
 {/if}
@@ -359,7 +389,14 @@
   }
 
   .chip {
+    display: block;
+    max-width: min(60vw, 360px);
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: var(--text-sm);
+  }
+
+  .chip.warning {
     color: var(--overlay-warning);
   }
 

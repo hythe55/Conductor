@@ -143,6 +143,11 @@ export class RemoteSession {
     }, delay)
   }
 
+  /** Another data channel alongside the control one, while connected. */
+  openChannel(label: string): RTCDataChannel | null {
+    return this.pc?.connectionState === 'connected' ? this.pc.createDataChannel(label, { ordered: true }) : null
+  }
+
   send(msg: ClientMsg) {
     if (this.channel?.readyState === 'open') this.channel.send(JSON.stringify(msg))
   }

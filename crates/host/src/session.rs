@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use conductor_proto::{ClientMsg, HostMsg};
+use conductor_proto::{ClientMsg, FILE_CHANNEL, HostMsg};
 use str0m::bwe::{Bitrate, BweKind};
 use str0m::change::SdpOffer;
 use str0m::channel::ChannelId;
@@ -20,6 +20,7 @@ use tokio::sync::mpsc;
 
 use crate::cursor::Cursor;
 use crate::encoder::Profile;
+use crate::files::Incoming;
 use crate::indicator::{Area, Banner};
 use crate::input::Injector;
 use crate::pipeline::{Config, Control, Pipeline, PipelineEvent};
@@ -95,6 +96,7 @@ struct Session {
     stats: Stats,
     clipboard: SharedClipboard,
     cursor: Cursor,
+    files: Incoming,
 }
 
 async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
@@ -117,6 +119,7 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
         stats: Stats::new(),
         clipboard: SharedClipboard::new(),
         cursor: Cursor::new(),
+        files: Incoming::default(),
     };
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -223,10 +226,20 @@ impl Session {
             Event::ChannelOpen(id, label) => {
                 if label == "control" {
                     self.control = Some(id);
+                } else if label == FILE_CHANNEL {
+                    self.files.open(id);
                 }
             }
             // The client closed its connection on purpose.
             Event::ChannelClose(id) if Some(id) == self.control => return Ok(false),
+            Event::ChannelClose(id) => self.files.close(id),
+            Event::ChannelData(d) if self.files.has(d.id) => {
+                if let Some(reply) = self.files.receive(d.id, d.binary, &d.data) {
+                    if let (Some(mut ch), Ok(json)) = (self.rtc.channel(d.id), serde_json::to_vec(&reply)) {
+                        _ = ch.write(false, &json);
+                    }
+                }
+            }
             Event::ChannelData(d) if Some(d.id) == self.control => {
                 match serde_json::from_slice::<ClientMsg>(&d.data) {
                     Ok(msg) => self.handle_client(msg),
@@ -391,7 +404,6 @@ impl Stats {
     }
 }
 
-/// Higher is better: High > Main > Constrained Baseline > Baseline.
 /// Keeps this PC's clipboard and the client's in step, for text.
 struct SharedClipboard {
     /// Clipboard sequence number last looked at.
@@ -446,6 +458,7 @@ impl SharedClipboard {
     }
 }
 
+/// Higher is better: High > Main > Constrained Baseline > Baseline.
 fn h264_rank(profile_level_id: Option<u32>) -> u8 {
     match profile_level_id.map(|p| p >> 8) {
         Some(0x6400) => 3,

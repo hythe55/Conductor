@@ -14,6 +14,7 @@ mod cursor;
 mod desktop;
 mod displays;
 mod encoder;
+mod files;
 mod https;
 mod indicator;
 mod input;

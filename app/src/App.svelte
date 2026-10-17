@@ -29,6 +29,21 @@
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   })
+
+  // A file dropped anywhere nothing takes it would open in place of the app.
+  $effect(() => {
+    const refuse = (e: DragEvent) => {
+      if (e.defaultPrevented || !e.dataTransfer?.types.includes('Files')) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'none'
+    }
+    window.addEventListener('dragover', refuse)
+    window.addEventListener('drop', refuse)
+    return () => {
+      window.removeEventListener('dragover', refuse)
+      window.removeEventListener('drop', refuse)
+    }
+  })
 </script>
 
 {#if view.name === 'stream'}

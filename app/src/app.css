@@ -23,6 +23,7 @@
   --overlay-bg: rgb(32 32 32 / 92%);
   --overlay-bg-hover: rgb(48 48 48 / 92%);
   --overlay-solid: #262626;
+  --overlay-scrim: rgb(0 0 0 / 55%);
   --overlay-hover: rgb(255 255 255 / 8%);
   --overlay-border: rgb(255 255 255 / 10%);
   --overlay-border-strong: rgb(255 255 255 / 25%);
