@@ -95,3 +95,24 @@ async fn call(request: &ControlRequest) -> std::io::Result<ControlStatus> {
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out"))??;
     Ok(serde_json::from_str(reply.trim())?)
 }
+
+/// Clipboard text bigger than this isn't shared; the host has the same limit.
+const CLIPBOARD_MAX: usize = 120 * 1024;
+
+/// Text on this PC's clipboard, to share with the PC being controlled.
+#[tauri::command]
+pub async fn read_clipboard() -> Option<String> {
+    tauri::async_runtime::spawn_blocking(|| conductor_clipboard::read_text(CLIPBOARD_MAX).ok().flatten())
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Puts text copied on the PC being controlled on this PC's clipboard.
+#[tauri::command]
+pub async fn write_clipboard(text: String) -> Result<(), Problem> {
+    tauri::async_runtime::spawn_blocking(move || conductor_clipboard::write_text(&text))
+        .await
+        .map_err(|e| Problem::new("Couldn't copy to this PC's clipboard.", e))?
+        .map_err(|e| Problem::new("Couldn't copy to this PC's clipboard.", format!("{e:#}")))
+}

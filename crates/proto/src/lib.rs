@@ -183,6 +183,9 @@ pub enum ClientMsg {
     /// Stop sending video while the client can't show it (minimized, screen off).
     #[serde(rename_all = "camelCase")]
     SetPaused { paused: bool },
+    /// Text copied on the client, to put on this PC's clipboard.
+    #[serde(rename_all = "camelCase")]
+    Clipboard { text: String },
 }
 
 /// Host to client, over the `control` data channel.
@@ -197,6 +200,9 @@ pub enum HostMsg {
     Stats { bitrate_kbps: u32, fps: u32, width: u32, height: u32, encoder: String },
     #[serde(rename_all = "camelCase")]
     Error { message: String },
+    /// Text that was just copied on this PC.
+    #[serde(rename_all = "camelCase")]
+    Clipboard { text: String },
 }
 
 #[cfg(test)]

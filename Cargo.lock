@@ -559,6 +559,7 @@ dependencies = [
 name = "conductor-app"
 version = "0.1.3"
 dependencies = [
+ "conductor-clipboard",
  "conductor-proto",
  "conductor-tailnet",
  "serde",
@@ -570,11 +571,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "conductor-clipboard"
+version = "0.1.3"
+dependencies = [
+ "anyhow",
+ "windows",
+]
+
+[[package]]
 name = "conductor-host"
 version = "0.1.3"
 dependencies = [
  "anyhow",
  "axum",
+ "conductor-clipboard",
  "conductor-proto",
  "conductor-tailnet",
  "minisign-verify",

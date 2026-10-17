@@ -19,5 +19,6 @@ tauri = { version = "2.12.4", features = [] }
 tokio = { version = "1.53.3", features = ["net", "io-util", "time", "macros"] }
 
 [target.'cfg(windows)'.dependencies]
+conductor-clipboard = { path = "../../crates/clipboard" }
 conductor-tailnet = { path = "../../crates/tailnet" }
 tauri-plugin-single-instance = "2.5.4"

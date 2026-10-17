@@ -19,6 +19,8 @@ export interface SessionHandlers {
   onState(state: SessionState, problem?: Problem): void
   onStream(stream: MediaStream): void
   onMessage(msg: HostMsg): void
+  /** The control channel is open and messages can be sent. */
+  onOpen?(): void
 }
 
 const RECONNECT_DELAYS = [500, 1000, 2000, 4000, 8000]
@@ -70,6 +72,9 @@ export class RemoteSession {
 
     const channel = pc.createDataChannel('control', { ordered: true })
     this.channel = channel
+    channel.onopen = () => {
+      if (this.channel === channel) this.handlers.onOpen?.()
+    }
     channel.onmessage = (e) => {
       try {
         this.handlers.onMessage(JSON.parse(e.data as string) as HostMsg)

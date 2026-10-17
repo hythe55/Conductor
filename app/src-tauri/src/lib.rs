@@ -26,6 +26,8 @@ pub fn run() {
         local::set_auto_update,
         local::check_for_updates,
         local::install_update,
+        local::read_clipboard,
+        local::write_clipboard,
     ]);
     builder.run(tauri::generate_context!()).expect("error while running Conductor");
 }

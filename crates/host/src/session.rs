@@ -32,6 +32,11 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 /// How many due timeouts to handle in a row before checking the socket.
 const MAX_DUE_TIMEOUTS: u32 = 256;
 const STATS_EVERY: Duration = Duration::from_secs(5);
+/// How often to look for something newly copied on this PC.
+const CLIPBOARD_EVERY: Duration = Duration::from_millis(250);
+/// Clipboard text bigger than this isn't shared. Data channel messages can be
+/// up to 256 KiB both ways, and JSON escaping can make text longer.
+const CLIPBOARD_MAX: usize = 120 * 1024;
 
 pub struct Params {
     /// Name of the device asking to control this PC, for the on-screen banner.
@@ -85,6 +90,7 @@ struct Session {
     connected: bool,
     paused: bool,
     stats: Stats,
+    clipboard: SharedClipboard,
 }
 
 async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
@@ -105,7 +111,10 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
         connected: false,
         paused: false,
         stats: Stats::new(),
+        clipboard: SharedClipboard::new(),
     };
+    let mut clipboard_check = tokio::time::interval(CLIPBOARD_EVERY);
+    clipboard_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut buf = vec![0u8; 2048];
     let mut last_rx = Instant::now();
 
@@ -163,6 +172,11 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
                 ))?;
             }
             Some(ev) = events_rx.recv() => s.handle_pipeline(ev)?,
+            _ = clipboard_check.tick() => {
+                if let Some(text) = s.clipboard.copied() {
+                    s.send(&HostMsg::Clipboard { text });
+                }
+            }
             _ = tokio::time::sleep_until(timeout.into()) => {}
         }
     }
@@ -283,6 +297,7 @@ impl Session {
                     self.start_pipeline();
                 }
             }
+            ClientMsg::Clipboard { text } => self.clipboard.paste(text),
         }
     }
 
@@ -363,6 +378,60 @@ impl Stats {
 }
 
 /// Higher is better: High > Main > Constrained Baseline > Baseline.
+/// Keeps this PC's clipboard and the client's in step, for text.
+struct SharedClipboard {
+    /// Clipboard sequence number last looked at.
+    seen: u32,
+    /// The text both sides have, so it isn't sent back where it came from.
+    shared: Option<String>,
+}
+
+impl SharedClipboard {
+    fn new() -> Self {
+        // Only what's copied from now on is shared, not what was there before.
+        Self { seen: conductor_clipboard::sequence(), shared: None }
+    }
+
+    /// New text copied on this PC since the last call.
+    fn copied(&mut self) -> Option<String> {
+        let now = conductor_clipboard::sequence();
+        if now == self.seen {
+            return None;
+        }
+        let text = match conductor_clipboard::read_text(CLIPBOARD_MAX) {
+            Ok(text) => {
+                self.seen = now;
+                // Something other than text, or too much of it.
+                text?
+            }
+            Err(e) => {
+                // Try again next time.
+                tracing::debug!("reading the clipboard: {e:#}");
+                return None;
+            }
+        };
+        if self.shared.as_ref() == Some(&text) {
+            return None;
+        }
+        self.shared = Some(text.clone());
+        Some(text)
+    }
+
+    /// Puts text copied on the client on this PC's clipboard.
+    fn paste(&mut self, text: String) {
+        if text.len() > CLIPBOARD_MAX || self.shared.as_ref() == Some(&text) {
+            return;
+        }
+        match conductor_clipboard::write_text(&text) {
+            Ok(()) => {
+                self.seen = conductor_clipboard::sequence();
+                self.shared = Some(text);
+            }
+            Err(e) => tracing::warn!("couldn't set the clipboard: {e:#}"),
+        }
+    }
+}
+
 fn h264_rank(profile_level_id: Option<u32>) -> u8 {
     match profile_level_id.map(|p| p >> 8) {
         Some(0x6400) => 3,

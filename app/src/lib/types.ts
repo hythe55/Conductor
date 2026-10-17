@@ -61,9 +61,11 @@ export type ClientMsg =
   | { t: 'selectDisplay'; id: string }
   | { t: 'requestKeyframe' }
   | { t: 'setPaused'; paused: boolean }
+  | { t: 'clipboard'; text: string }
 
 export type HostMsg =
   | { t: 'hello'; host: HostInfo; display: string }
   | { t: 'displays'; displays: DisplayInfo[]; active: string }
   | { t: 'stats'; bitrateKbps: number; fps: number; width: number; height: number; encoder: string }
   | { t: 'error'; message: string }
+  | { t: 'clipboard'; text: string }

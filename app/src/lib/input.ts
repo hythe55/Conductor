@@ -26,6 +26,16 @@ function normalized(video: HTMLVideoElement, clientX: number, clientY: number) {
 export interface DesktopInputOptions {
   /** Return true to keep a key combo on this device instead of sending it. */
   localShortcut(e: KeyboardEvent): boolean
+  /** Gets this device's clipboard text when the user pastes, before the paste keys are sent. */
+  onPaste?(text: string): void
+}
+
+/** How long to wait for the browser's paste event before sending the paste keys anyway. */
+const PASTE_WAIT_MS = 150
+
+function isPaste(e: KeyboardEvent) {
+  if (e.altKey || e.metaKey) return false
+  return (e.ctrlKey && e.code === 'KeyV') || (e.shiftKey && !e.ctrlKey && e.code === 'Insert')
 }
 
 /** Mouse, wheel and keyboard for desktop browsers and the desktop app. */
@@ -39,6 +49,25 @@ export function attachDesktopInput(
   let frame = 0
   let wheelX = 0
   let wheelY = 0
+  // A paste key held back until the clipboard has been sent.
+  let pendingPaste: string | null = null
+  let pasteTimer: number | undefined
+
+  const flushPaste = () => {
+    clearTimeout(pasteTimer)
+    if (pendingPaste) send({ t: 'key', code: pendingPaste, down: true })
+    pendingPaste = null
+  }
+
+  // The browser reads the clipboard for a paste only if the key press goes through,
+  // so let it through, take the text from the paste event, then send the keys.
+  const onPasteEvent = (e: ClipboardEvent) => {
+    if (!pendingPaste) return
+    e.preventDefault()
+    const text = e.clipboardData?.getData('text/plain')
+    if (text) opts.onPaste?.(text)
+    flushPaste()
+  }
 
   const flushMove = () => {
     frame = 0
@@ -86,8 +115,15 @@ export function attachDesktopInput(
 
   const onKey = (e: KeyboardEvent) => {
     if (opts.localShortcut(e)) return
-    e.preventDefault()
     e.stopPropagation()
+    if (opts.onPaste && e.type === 'keydown' && isPaste(e)) {
+      flushPaste()
+      pendingPaste = e.code
+      pasteTimer = window.setTimeout(flushPaste, PASTE_WAIT_MS)
+      return
+    }
+    e.preventDefault()
+    if (pendingPaste === e.code) flushPaste()
     if (e.code && e.code !== 'Unidentified') {
       send({ t: 'key', code: e.code, down: e.type === 'keydown' })
     } else if (e.type === 'keydown' && e.key.length === 1) {
@@ -106,9 +142,12 @@ export function attachDesktopInput(
   window.addEventListener('keydown', onKey, true)
   window.addEventListener('keyup', onKey, true)
   window.addEventListener('blur', release)
+  surface.addEventListener('paste', onPasteEvent)
 
   return () => {
     cancelAnimationFrame(frame)
+    clearTimeout(pasteTimer)
+    surface.removeEventListener('paste', onPasteEvent)
     surface.removeEventListener('pointermove', onMove)
     surface.removeEventListener('pointerdown', onDown)
     surface.removeEventListener('pointerup', onUp)

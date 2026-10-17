@@ -3,6 +3,7 @@
   import { Problem } from '../lib/errors'
   import { attachDesktopInput } from '../lib/input'
   import { RemoteSession, type SessionState, type Stats } from '../lib/session'
+  import { readClipboard, writeClipboard } from '../lib/platform'
   import { attachTouchInput } from '../lib/touch'
   import type { DisplayInfo, HostInfo } from '../lib/types'
   import Handle from '../components/Handle.svelte'
@@ -37,6 +38,28 @@
 
   const coarse = window.matchMedia('(pointer: coarse)').matches
 
+  // Clipboard text both devices have, and text copied there that couldn't be put on this device's clipboard yet.
+  let sharedText: string | null = null
+  let notCopiedHere: string | null = null
+
+  function shareClipboard(text: string | null) {
+    // The host doesn't take more than this either.
+    if (text == null || text === sharedText || text.length > 120 * 1024) return
+    sharedText = text
+    session.send({ t: 'clipboard', text })
+  }
+
+  async function copyHere(text: string) {
+    sharedText = text
+    notCopiedHere = (await writeClipboard(text)) ? null : text
+  }
+
+  // Coming back to this window: whatever was copied meanwhile goes to the side that doesn't have it.
+  async function syncClipboard() {
+    if (notCopiedHere != null) await copyHere(notCopiedHere)
+    else shareClipboard(await readClipboard())
+  }
+
   const dpr = window.devicePixelRatio || 1
   const session = new RemoteSession(
     start.url,
@@ -61,7 +84,12 @@
           session.options.display = msg.active
         } else if (msg.t === 'error') {
           error = new Problem(`Couldn’t show the screen of ${info.name}. Try another display, or reconnect.`, msg.message)
+        } else if (msg.t === 'clipboard') {
+          void copyHere(msg.text)
         }
+      },
+      onOpen() {
+        void syncClipboard()
       },
     },
   )
@@ -98,7 +126,7 @@
 
   $effect(() => {
     const send = (m: Parameters<typeof session.send>[0]) => session.send(m)
-    const detachDesktop = attachDesktopInput(surface, video, send, { localShortcut })
+    const detachDesktop = attachDesktopInput(surface, video, send, { localShortcut, onPaste: shareClipboard })
     const detachTouch = attachTouchInput(surface, video, pointer, send, {
       displayWidth: () => displays.find((d) => d.id === activeDisplay)?.width || video.videoWidth || 1920,
     })
@@ -121,11 +149,14 @@
   $effect(() => {
     const onVisibility = () => session.send({ t: 'setPaused', paused: document.hidden })
     const onFullscreen = () => (fullscreen = !!document.fullscreenElement)
+    const onFocus = () => void syncClipboard()
     document.addEventListener('visibilitychange', onVisibility)
     document.addEventListener('fullscreenchange', onFullscreen)
+    window.addEventListener('focus', onFocus)
     return () => {
       document.removeEventListener('visibilitychange', onVisibility)
       document.removeEventListener('fullscreenchange', onFullscreen)
+      window.removeEventListener('focus', onFocus)
     }
   })
 

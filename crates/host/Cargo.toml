@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"
+conductor-clipboard = { path = "../clipboard" }
 conductor-proto = { version = "0.1.0", path = "../proto" }
 conductor-tailnet = { version = "0.1.0", path = "../tailnet" }
 serde = { version = "1.0.229", features = ["derive"] }
