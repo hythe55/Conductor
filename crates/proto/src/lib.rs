@@ -203,6 +203,9 @@ pub enum HostMsg {
     /// Text that was just copied on this PC.
     #[serde(rename_all = "camelCase")]
     Clipboard { text: String },
+    /// The pointer changed shape. A CSS cursor value, `none` when it's hidden.
+    #[serde(rename_all = "camelCase")]
+    Cursor { name: String },
 }
 
 #[cfg(test)]

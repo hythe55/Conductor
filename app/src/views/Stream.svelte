@@ -33,6 +33,8 @@
   let stats = $state<Stats | null>(null)
   let fullscreen = $state(false)
   let keyboardOpen = $state(false)
+  // The remote pointer's shape, shown in place of this device's pointer.
+  let cursor = $state('default')
   // Height of the part of the window the phone keyboard leaves uncovered.
   let viewHeight = $state<number | null>(null)
 
@@ -86,6 +88,8 @@
           error = new Problem(`Couldn’t show the screen of ${info.name}. Try another display, or reconnect.`, msg.message)
         } else if (msg.t === 'clipboard') {
           void copyHere(msg.text)
+        } else if (msg.t === 'cursor') {
+          cursor = msg.name
         }
       },
       onOpen() {
@@ -212,7 +216,14 @@
 <div class="stream" style:height={viewHeight ? `${viewHeight}px` : null}>
   <!-- Focus stays here for the whole session, so it has no outline: one would frame the remote screen. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <div class="surface" bind:this={surface} tabindex="0" role="application" aria-label="Screen of {info.name}">
+  <div
+    class="surface"
+    bind:this={surface}
+    style:cursor
+    tabindex="0"
+    role="application"
+    aria-label="Screen of {info.name}"
+  >
     <!-- svelte-ignore a11y_media_has_caption -->
     <video
       bind:this={video}

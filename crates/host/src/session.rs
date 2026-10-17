@@ -18,6 +18,7 @@ use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcConfig}
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
+use crate::cursor::Cursor;
 use crate::encoder::Profile;
 use crate::indicator::{Area, Banner};
 use crate::input::Injector;
@@ -32,8 +33,10 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 /// How many due timeouts to handle in a row before checking the socket.
 const MAX_DUE_TIMEOUTS: u32 = 256;
 const STATS_EVERY: Duration = Duration::from_secs(5);
-/// How often to look for something newly copied on this PC.
-const CLIPBOARD_EVERY: Duration = Duration::from_millis(250);
+/// How often to check the pointer's shape.
+const TICK: Duration = Duration::from_millis(50);
+/// Check for something newly copied on this PC every this many ticks.
+const CLIPBOARD_TICKS: u32 = 5;
 /// Clipboard text bigger than this isn't shared. Data channel messages can be
 /// up to 256 KiB both ways, and JSON escaping can make text longer.
 const CLIPBOARD_MAX: usize = 120 * 1024;
@@ -91,6 +94,7 @@ struct Session {
     paused: bool,
     stats: Stats,
     clipboard: SharedClipboard,
+    cursor: Cursor,
 }
 
 async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
@@ -112,9 +116,11 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
         paused: false,
         stats: Stats::new(),
         clipboard: SharedClipboard::new(),
+        cursor: Cursor::new(),
     };
-    let mut clipboard_check = tokio::time::interval(CLIPBOARD_EVERY);
-    clipboard_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut tick = tokio::time::interval(TICK);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut ticks = 0u32;
     let mut buf = vec![0u8; 2048];
     let mut last_rx = Instant::now();
 
@@ -172,9 +178,17 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
                 ))?;
             }
             Some(ev) = events_rx.recv() => s.handle_pipeline(ev)?,
-            _ = clipboard_check.tick() => {
-                if let Some(text) = s.clipboard.copied() {
-                    s.send(&HostMsg::Clipboard { text });
+            _ = tick.tick() => {
+                ticks = ticks.wrapping_add(1);
+                if s.control.is_some() && !s.paused {
+                    if let Some(name) = s.cursor.changed() {
+                        s.send(&HostMsg::Cursor { name: name.into() });
+                    }
+                }
+                if ticks % CLIPBOARD_TICKS == 0 {
+                    if let Some(text) = s.clipboard.copied() {
+                        s.send(&HostMsg::Clipboard { text });
+                    }
                 }
             }
             _ = tokio::time::sleep_until(timeout.into()) => {}

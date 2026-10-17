@@ -69,3 +69,4 @@ export type HostMsg =
   | { t: 'stats'; bitrateKbps: number; fps: number; width: number; height: number; encoder: string }
   | { t: 'error'; message: string }
   | { t: 'clipboard'; text: string }
+  | { t: 'cursor'; name: string }
