@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/proto", "crates/tailnet", "crates/clipboard", "crates/host", "app/src-tauri"]
 
 [workspace.package]
-version = "0.1.10"
+version = "0.1.11"
 edition = "2024"
 license = "GPL-3.0-only"
 repository = "https://github.com/hythe55/Conductor"
