@@ -11,7 +11,7 @@ Control your Windows PCs from your other devices, over your own [Tailscale](http
 - Sends nothing while nobody is watching, and nothing for sound while it's quiet
 - Sleep, restart or shut down a PC from your other devices, and wake it again from another PC on its network once a test wake has worked
 - Updates itself from GitHub releases when nobody is using it
-- Control from the Windows app, the Android app, or any browser on your tailnet
+- Control from the Windows app or any browser on your tailnet, with touch controls on phones and tablets
 
 Conductor is under active development. Some features listed in the [roadmap](#roadmap) aren't built yet.
 
@@ -59,9 +59,11 @@ npm run tauri build
 
 The installer ends up in `target/release/bundle/nsis/`. To run the host without installing the service, build it with `cargo build -p conductor-host` and run `target/debug/conductor-host.exe` from the repository root.
 
+The Android app also needs JDK 17 and the Android SDK and NDK, with `JAVA_HOME`, `ANDROID_HOME` and `NDK_HOME` set. Build it with `npx tauri android build --apk` in `app`. On Windows, turn on Developer Mode first: the build creates symbolic links. The app asks for the name of one of your PCs the first time it opens, since a phone can't list the devices on your tailnet itself.
+
 ## Roadmap
 
-- Android app with touch controls
+- Android app downloads (it builds from source today)
 - Virtual displays, sized to the device you're controlling from
 - Sound even when the PC's own speakers are muted
 - Scheduled sleep, shutdown and restart

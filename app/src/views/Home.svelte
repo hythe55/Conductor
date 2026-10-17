@@ -2,9 +2,9 @@
   import { tick } from 'svelte'
   import Icon from '../components/Icon.svelte'
   import ProblemText from '../components/ProblemText.svelte'
-  import { confirmWake, deviceUrl, power, reachable, wake } from '../lib/api'
-  import { type Problem, toProblem } from '../lib/errors'
-  import { isDesktopApp, listDevices } from '../lib/platform'
+  import { confirmWake, deviceUrl, power, reachable, Unreachable, wake } from '../lib/api'
+  import { Problem, toProblem } from '../lib/errors'
+  import { devicesFrom, isDesktopApp, isPhoneApp, knownPcs, listDevices } from '../lib/platform'
   import type { Device, HostInfo, PowerAction, WakeAdapter } from '../lib/types'
   import { waitUntil, wakerFor } from '../lib/wake'
 
@@ -30,7 +30,42 @@
   let rows = $state.raw<Record<string, Row>>({})
   let menuFor = $state<string | null>(null)
 
+  /** The phone app asks one of the owner's PCs for the list; this is for naming one. */
+  let askPc = $state(isPhoneApp && knownPcs().length === 0)
+  let pcName = $state('')
+  let finding = $state(false)
+  let pcProblem = $state<Problem | null>(null)
+
+  async function findDevices(e: SubmitEvent) {
+    e.preventDefault()
+    const name = pcName.trim()
+    if (!name || finding) return
+    finding = true
+    try {
+      all = await devicesFrom(name)
+      error = null
+      pcProblem = null
+      askPc = false
+    } catch (e) {
+      pcProblem =
+        e instanceof Unreachable
+          ? new Problem(`Couldn’t reach ${name}. Check the name, and that the PC is on and runs Conductor.`, e.details)
+          : toProblem(e, `Couldn’t get the list of devices from ${name}.`)
+      // Back to the name, in case the button that was pressed lost focus.
+      document.getElementById('pc-name')?.focus()
+    } finally {
+      finding = false
+    }
+  }
+
+  async function usePc() {
+    askPc = true
+    await tick()
+    document.getElementById('pc-name')?.focus()
+  }
+
   async function load() {
+    if (askPc) return
     try {
       all = await listDevices()
       error = null
@@ -360,10 +395,37 @@
     {/if}
   </header>
 
-  {#if error}
+  {#if askPc}
+    <form class="empty" onsubmit={findDevices}>
+      <label for="pc-name">Enter the name of one of your PCs that runs Conductor, as the Tailscale app shows it.</label>
+      <div class="find">
+        <input
+          id="pc-name"
+          bind:value={pcName}
+          required
+          autocapitalize="off"
+          autocomplete="off"
+          spellcheck="false"
+          enterkeyhint="go"
+          aria-describedby={pcProblem ? 'pc-problem' : undefined}
+        />
+        <button class="btn primary" disabled={finding}>{finding ? 'Finding…' : 'Find devices'}</button>
+      </div>
+      {#if pcProblem}
+        <div class="problem" id="pc-problem" role="alert">
+          <ProblemText problem={pcProblem} />
+        </div>
+      {/if}
+    </form>
+  {:else if error}
     <div class="problem" role="alert">
       <ProblemText problem={error} />
-      <button class="btn" onclick={retry}>Try again</button>
+      <div class="buttons">
+        <button class="btn" onclick={retry}>Try again</button>
+        {#if isPhoneApp}
+          <button class="link" onclick={usePc}>Use another PC</button>
+        {/if}
+      </div>
     </div>
   {:else if list === null}
     <p class="quiet">Looking for your devices…</p>
@@ -637,6 +699,34 @@
   .problem p,
   .empty p {
     margin: 0;
+  }
+
+  .problem .buttons {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+  }
+
+  .find {
+    display: flex;
+    gap: var(--space-2);
+    width: 100%;
+  }
+
+  input {
+    flex: 1;
+    min-width: 0;
+    min-height: 36px;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+  }
+
+  @media (pointer: coarse) {
+    input {
+      min-height: var(--touch-target);
+    }
   }
 
   @media (pointer: coarse) {

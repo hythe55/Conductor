@@ -1,6 +1,9 @@
 import { Problem } from './errors'
 import type { Device, HostInfo, PowerAction, WakeAdapter, WakeInfo } from './types'
 
+/** The PC didn't answer at all. */
+export class Unreachable extends Problem {}
+
 /** Base URL of a host's API. Empty string means the host serving this page. */
 export type HostUrl = string
 
@@ -9,7 +12,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   try {
     res = await fetch(url, { ...init, signal: init?.signal ?? AbortSignal.timeout(8000) })
   } catch (e) {
-    throw new Problem(
+    throw new Unreachable(
       "Couldn't reach this PC. It may be off, asleep, or not on your tailnet.",
       e instanceof Error ? e.message : String(e),
     )
@@ -34,7 +37,7 @@ export function devices(host: HostUrl): Promise<Device[]> {
   return request(`${host}/api/devices`)
 }
 
-const PORT = 4280
+export const PORT = 4280
 
 /** Where to reach a device's API from this page. */
 export function deviceUrl(d: Device): HostUrl {

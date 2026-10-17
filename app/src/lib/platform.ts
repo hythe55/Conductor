@@ -1,6 +1,6 @@
 import { invoke, type InvokeArgs, type InvokeOptions } from '@tauri-apps/api/core'
-import { devices as fetchDevices } from './api'
-import { toProblem } from './errors'
+import { devices as fetchDevices, PORT, Unreachable } from './api'
+import { Problem, toProblem } from './errors'
 import type { FileSink } from './files'
 import type { ControlStatus, Device } from './types'
 
@@ -8,6 +8,63 @@ import type { ControlStatus, Device } from './types'
 export const isApp = '__TAURI_INTERNALS__' in window
 /** The Windows app, which can read the tailnet and host this PC. */
 export const isDesktopApp = isApp && /Windows/.test(navigator.userAgent)
+/** The phone app. Phones can't read the tailnet, so it asks one of the owner's PCs. */
+export const isPhoneApp = isApp && !isDesktopApp
+
+const PCS_KEY = 'conductor.pcs'
+
+/** PCs the phone app can ask for the device list, the one that answered last first. */
+export function knownPcs(): string[] {
+  try {
+    const pcs = JSON.parse(localStorage.getItem(PCS_KEY) ?? '[]')
+    return Array.isArray(pcs) ? pcs.filter((p) => typeof p === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function rememberPcs(pcs: string[]) {
+  try {
+    localStorage.setItem(PCS_KEY, JSON.stringify([...new Set(pcs)]))
+  } catch {
+    // Asked for again next time.
+  }
+}
+
+/** Remembers `pc`, which just answered with `list`, and the other PCs on it, for next time. */
+function rememberAnswer(pc: string, list: Device[]) {
+  const others = list.filter((d) => d.host && !d.isYou).map((d) => d.address)
+  rememberPcs([pc, ...others, ...knownPcs()].slice(0, 16))
+}
+
+/** Asks `pc` (a name or tailnet address) for the device list. */
+export async function devicesFrom(pc: string): Promise<Device[]> {
+  const list = await fetchDevices(`http://${pc}:${PORT}`)
+  rememberAnswer(pc, list)
+  return list
+}
+
+async function devicesFromKnownPcs(): Promise<Device[]> {
+  const pcs = knownPcs()
+  if (pcs.length === 0) throw new Problem('Enter the name of a PC that runs Conductor.')
+  // All at once, since a PC that's asleep takes seconds to give up on.
+  const asks = pcs.map(async (pc) => ({ pc, list: await fetchDevices(`http://${pc}:${PORT}`) }))
+  try {
+    const { pc, list } = await Promise.any(asks)
+    rememberAnswer(pc, list)
+    return list
+  } catch (e) {
+    const errors: unknown[] = e instanceof AggregateError ? e.errors : [e]
+    const other = errors.find((x) => !(x instanceof Unreachable))
+    if (other) throw toProblem(other, 'Couldn’t get the list of devices.')
+    throw new Problem(
+      pcs.length === 1
+        ? `Couldn’t reach ${pcs[0]}. It may be off, asleep, or not on your tailnet.`
+        : 'Couldn’t reach any of your PCs. They may be off, asleep, or not on your tailnet.',
+      errors.map((x) => (x as Unreachable).details).join('\n'),
+    )
+  }
+}
 
 async function call<T>(cmd: string, args?: InvokeArgs, options?: InvokeOptions): Promise<T> {
   try {
@@ -20,6 +77,7 @@ async function call<T>(cmd: string, args?: InvokeArgs, options?: InvokeOptions):
 /** The owner's PCs. The device this runs on is marked `isYou`. */
 export function listDevices(): Promise<Device[]> {
   if (isDesktopApp) return call('devices')
+  if (isPhoneApp) return devicesFromKnownPcs()
   return fetchDevices('')
 }
 
