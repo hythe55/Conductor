@@ -37,8 +37,9 @@ const PORT = 4280
 
 /** Where to reach a device's API from this page. */
 export function deviceUrl(d: Device): HostUrl {
-  // The host serving this page is reachable at the page's own origin.
-  if (d.isSelf && location.port === String(PORT)) return ''
+  // The host serving this page (or the dev server's proxy to it) is reachable
+  // at the page's own origin. The desktop app's origin has no port.
+  if (d.isSelf && location.port !== '') return ''
   return `http://${d.address}:${PORT}`
 }
 
