@@ -557,7 +557,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-app"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "conductor-clipboard",
  "conductor-proto",
@@ -572,7 +572,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-clipboard"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "windows",
@@ -580,7 +580,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-host"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "axum",
@@ -601,7 +601,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-proto"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -609,7 +609,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-tailnet"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "conductor-proto",
