@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use conductor_proto::Device;
+use conductor_proto::{Device, Route};
 use conductor_tailnet::{Gate, Status};
 use tokio::sync::Mutex;
 
@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 /// has the device list open, so idle hosts never probe anyone.
 const DEVICES_TTL: Duration = Duration::from_secs(5);
 const STATUS_TTL: Duration = Duration::from_secs(30);
+const ROUTE_TTL: Duration = Duration::from_secs(5);
 
 pub struct AppState {
     /// Display name, e.g. `MSI`.
@@ -109,6 +110,12 @@ impl AppState {
             .find(|n| n.tailscale_ips.contains(&ip))
             .map(|n| n.host_name.clone())
             .unwrap_or_else(|| ip.to_string())
+    }
+
+    /// How traffic to the device at `ip` travels, when it's a peer on the tailnet.
+    pub async fn route_to(&self, ip: IpAddr) -> Option<Route> {
+        let status = self.status_within(ROUTE_TTL).await;
+        status.peer.values().find(|n| n.tailscale_ips.contains(&ip)).map(|n| n.route())
     }
 
     /// Whether `host` (lowercase, no port) names one of the owner's devices.

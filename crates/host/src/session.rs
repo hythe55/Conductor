@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use conductor_proto::{COPIED_CHANNEL, ClientMsg, FILE_CHANNEL, FileReply, HostMsg};
+use conductor_proto::{COPIED_CHANNEL, ClientMsg, FILE_CHANNEL, FileReply, HostMsg, Route};
 use str0m::bwe::{Bitrate, BweKind};
 use str0m::change::SdpOffer;
 use str0m::channel::ChannelId;
@@ -51,10 +51,16 @@ const CHANNELS_QUEUED_MAX: usize = 4 << 20;
 /// desktops.
 const RETRY_FIRST: Duration = Duration::from_secs(1);
 const RETRY_MOST: Duration = Duration::from_secs(16);
+/// How often to check whether the connection goes straight to the client or
+/// through a relay. Tailscale often starts relayed and finds a direct path
+/// a few seconds later.
+const ROUTE_EVERY: Duration = Duration::from_secs(5);
 
 pub struct Params {
     /// Name of the device asking to control this PC, for the on-screen banner.
     pub controller: String,
+    /// The client's tailnet address.
+    pub peer: IpAddr,
     pub offer: String,
     pub display: Option<String>,
     pub max_size: (u32, u32),
@@ -81,7 +87,9 @@ pub async fn start(state: Arc<AppState>, bind_ip: IpAddr, params: Params) -> Res
 
     tokio::spawn(async move {
         let _guard = state.session_started(params.controller.clone());
-        if let Err(e) = run(rtc, socket, params).await {
+        let (route_tx, route_rx) = mpsc::channel(1);
+        tokio::spawn(watch_route(state.clone(), params.peer, route_tx));
+        if let Err(e) = run(rtc, socket, params, route_rx).await {
             tracing::warn!("session ended: {e:#}");
         } else {
             tracing::info!("session ended");
@@ -98,6 +106,8 @@ struct Session {
     sound: Option<Audio>,
     wants_sound: bool,
     sound_tx: mpsc::Sender<audio::Packet>,
+    /// How the connection travels, told to the client when its channel opens.
+    route: Option<Route>,
     control: Option<ChannelId>,
     pipeline: Option<Pipeline>,
     events_tx: mpsc::Sender<PipelineEvent>,
@@ -121,7 +131,26 @@ struct Session {
     outgoing: Outgoing,
 }
 
-async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
+/// Tells the session how the connection travels, whenever that changes, until the session ends.
+async fn watch_route(state: Arc<AppState>, peer: IpAddr, tx: mpsc::Sender<Route>) {
+    let mut last = None;
+    loop {
+        if let Some(route) = state.route_to(peer).await
+            && last.as_ref() != Some(&route)
+        {
+            last = Some(route.clone());
+            if tx.send(route).await.is_err() {
+                return;
+            }
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(ROUTE_EVERY) => {}
+            _ = tx.closed() => return,
+        }
+    }
+}
+
+async fn run(rtc: Rtc, socket: UdpSocket, params: Params, mut route_rx: mpsc::Receiver<Route>) -> Result<()> {
     let local = socket.local_addr()?;
     let (events_tx, mut events_rx) = mpsc::channel(32);
     let (sound_tx, mut sound_rx) = mpsc::channel(16);
@@ -132,6 +161,7 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
         sound: None,
         wants_sound: false,
         sound_tx,
+        route: None,
         control: None,
         pipeline: None,
         events_tx,
@@ -214,6 +244,11 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
             }
             Some(ev) = events_rx.recv() => s.handle_pipeline(ev)?,
             Some(p) = sound_rx.recv() => s.send_sound(p)?,
+            Some(route) = route_rx.recv() => {
+                tracing::debug!("route to the client: {route:?}");
+                s.send(&HostMsg::Route { route: route.clone() });
+                s.route = Some(route);
+            }
             (id, message) = s.outgoing.next() => s.send_copied(id, message),
             _ = tick.tick() => {
                 ticks = ticks.wrapping_add(1);
@@ -281,6 +316,9 @@ impl Session {
             Event::ChannelOpen(id, label) => {
                 if label == "control" {
                     self.control = Some(id);
+                    if let Some(route) = self.route.clone() {
+                        self.send(&HostMsg::Route { route });
+                    }
                 } else if label == FILE_CHANNEL {
                     self.incoming.open(id);
                 } else if label == COPIED_CHANNEL {

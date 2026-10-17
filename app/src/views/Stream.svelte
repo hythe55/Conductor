@@ -6,7 +6,7 @@
   import { readClipboard, writeClipboard } from '../lib/platform'
   import { attachTouchInput } from '../lib/touch'
   import { Transfers } from '../lib/transfers.svelte'
-  import type { DisplayInfo, HostInfo } from '../lib/types'
+  import type { DisplayInfo, HostInfo, Route } from '../lib/types'
   import Handle from '../components/Handle.svelte'
   import Keyboard from '../components/Keyboard.svelte'
   import ProblemText from '../components/ProblemText.svelte'
@@ -39,6 +39,11 @@
   const SOUND_KEY = 'conductor.sound'
   let sound = $state(savedSound())
   let soundLater: AbortController | undefined
+  let route = $state<Route | null>(null)
+  // Said on the handle once the connection has been relayed for a while. Tailscale
+  // often starts relayed and finds a direct path within seconds.
+  let relayedNote = $state(false)
+  let relayTimer: number | undefined
   let keyboardOpen = $state(false)
   // The remote pointer's shape, shown in place of this device's pointer.
   let cursor = $state('default')
@@ -157,6 +162,8 @@
           void copyHere(msg.text)
         } else if (msg.t === 'cursor') {
           cursor = msg.name
+        } else if (msg.t === 'route') {
+          onRoute(msg.route)
         } else if (msg.t === 'filesCopied') {
           transfers.hostCopied(msg.offer, msg.files, msg.folders)
         }
@@ -281,6 +288,27 @@
     })
   }
 
+  function onRoute(next: Route) {
+    const wasRelayed = !!route && route.kind !== 'direct'
+    route = next
+    if (next.kind === 'direct') {
+      clearTimeout(relayTimer)
+      relayedNote = false
+    } else if (!wasRelayed) {
+      clearTimeout(relayTimer)
+      relayTimer = window.setTimeout(() => {
+        relayedNote = true
+        relayTimer = window.setTimeout(() => (relayedNote = false), 4000)
+      }, 6000)
+    }
+  }
+
+  function routeText(r: Route) {
+    if (r.kind === 'direct') return 'Direct connection'
+    if (r.kind === 'peerRelay') return 'Relayed by another device'
+    return r.region ? `Relayed by Tailscale (${r.region})` : 'Relayed by Tailscale'
+  }
+
   function selectDisplay(id: string) {
     if (id === activeDisplay) return
     activeDisplay = id
@@ -315,6 +343,7 @@
   }
 
   onDestroy(() => {
+    clearTimeout(relayTimer)
     soundLater?.abort()
     transfers.stop()
     session.close()
@@ -327,7 +356,7 @@
   // What the handle says, most important first.
   const notice = $derived.by(() => {
     if (hasVideo && error) return { chip: 'Can’t show this display', problem: error, warning: true }
-    return transfers.notice
+    return transfers.notice ?? (relayedNote ? { chip: 'Relayed connection' } : null)
   })
 </script>
 
@@ -418,6 +447,7 @@
       <span>{stats.width}×{stats.height} at {stats.fps} fps</span>
       <span>{(stats.bitrateKbps / 1000).toFixed(1)} Mbps</span>
       {#if stats.rttMs != null}<span>{stats.rttMs} ms round trip</span>{/if}
+      {#if route}<span>{routeText(route)}</span>{/if}
       {#if stats.decoder}<span>Decoder: {stats.decoder}</span>{/if}
       {#if stats.dropped || stats.lost}<span>{stats.dropped} frames dropped, {stats.lost} packets lost</span>{/if}
     </div>

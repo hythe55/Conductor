@@ -211,6 +211,9 @@ pub enum HostMsg {
     /// The pointer changed shape. A CSS cursor value, `none` when it's hidden.
     #[serde(rename_all = "camelCase")]
     Cursor { name: String },
+    /// How the connection travels between the two devices, sent when that changes.
+    #[serde(rename_all = "camelCase")]
+    Route { route: Route },
     /// Files were just copied on this PC and can be fetched by `offer` on
     /// [`COPIED_CHANNEL`]s. Empty when the clipboard no longer holds files.
     #[serde(rename_all = "camelCase")]
@@ -220,6 +223,19 @@ pub enum HostMsg {
         /// Copied folders, which can't be fetched.
         folders: u32,
     },
+}
+
+/// How traffic between a client and host travels over the tailnet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Route {
+    /// Straight between the two devices.
+    Direct,
+    /// Through another device on the tailnet.
+    PeerRelay,
+    /// Through one of Tailscale's relay servers, named by its region code (e.g. `nyc`).
+    #[serde(rename_all = "camelCase")]
+    Relay { region: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

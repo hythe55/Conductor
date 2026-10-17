@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use conductor_proto::Route;
 use serde::Deserialize;
 use tokio::process::Command;
 
@@ -74,6 +75,16 @@ pub struct Node {
     /// (RFC 3339). Tailscale reports year 1 for machines that are online.
     #[serde(default)]
     pub last_seen: Option<String>,
+    /// Where traffic to the peer goes when it goes straight there. Empty
+    /// while it's relayed, or when there's been no traffic lately.
+    #[serde(default)]
+    pub cur_addr: String,
+    /// Code of the region of Tailscale's relay servers the peer uses, e.g. `nyc`.
+    #[serde(default)]
+    pub relay: String,
+    /// Set while another device on the tailnet relays traffic to the peer.
+    #[serde(default)]
+    pub peer_relay: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -128,6 +139,17 @@ impl Node {
     /// `last_seen`, unless it's Tailscale's zero time.
     pub fn last_seen(&self) -> Option<&str> {
         self.last_seen.as_deref().filter(|t| !t.starts_with("0001-"))
+    }
+
+    /// How traffic to this peer travels right now.
+    pub fn route(&self) -> Route {
+        if !self.cur_addr.is_empty() {
+            Route::Direct
+        } else if !self.peer_relay.is_empty() {
+            Route::PeerRelay
+        } else {
+            Route::Relay { region: self.relay.clone() }
+        }
     }
 
     /// Short machine name as MagicDNS resolves it (lowercase, first label).
@@ -185,5 +207,13 @@ mod tests {
         let w: WhoIs = serde_json::from_str(json).unwrap();
         assert_eq!(w.user_profile.unwrap().id, 42);
         assert_eq!(w.node.unwrap().user, 42);
+    }
+
+    #[test]
+    fn routes() {
+        let node = |extra: &str| -> Node { serde_json::from_str(&format!(r#"{{"HostName":"pc"{extra}}}"#)).unwrap() };
+        assert_eq!(node(r#","CurAddr":"192.168.1.2:41641","Relay":"nyc""#).route(), Route::Direct);
+        assert_eq!(node(r#","CurAddr":"","Relay":"nyc""#).route(), Route::Relay { region: "nyc".into() });
+        assert_eq!(node(r#","CurAddr":"","PeerRelay":"100.64.0.9:7777:3","Relay":"nyc""#).route(), Route::PeerRelay);
     }
 }

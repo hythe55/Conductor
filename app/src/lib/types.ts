@@ -71,8 +71,12 @@ export type HostMsg =
   | { t: 'error'; message: string }
   | { t: 'clipboard'; text: string }
   | { t: 'cursor'; name: string }
+  | { t: 'route'; route: Route }
   /** Files copied on the host, fetched by `offer`. Empty when the clipboard no longer holds files. */
   | { t: 'filesCopied'; offer: number; files: CopiedFile[]; folders: number }
+
+/** How the connection travels over the tailnet. `region` names one of Tailscale's relay server regions. */
+export type Route = { kind: 'direct' } | { kind: 'peerRelay' } | { kind: 'relay'; region: string }
 
 export interface CopiedFile {
   name: string
