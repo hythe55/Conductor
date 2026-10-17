@@ -45,6 +45,11 @@ const CLIPBOARD_MAX: usize = 120 * 1024;
 /// How much the data channels may queue in all. Files waiting to go out use
 /// at most a quarter, so messages on the control channel always fit.
 const CHANNELS_QUEUED_MAX: usize = 4 << 20;
+/// When the picture fails, try again after this long, doubling each time up
+/// to the most. Capture often fails for a moment, e.g. while Windows switches
+/// desktops.
+const RETRY_FIRST: Duration = Duration::from_secs(1);
+const RETRY_MOST: Duration = Duration::from_secs(16);
 
 pub struct Params {
     /// Name of the device asking to control this PC, for the on-screen banner.
@@ -98,6 +103,11 @@ struct Session {
     bitrate: u32,
     connected: bool,
     paused: bool,
+    /// When to try starting the picture again after it failed.
+    retry_at: Option<Instant>,
+    retry_after: Duration,
+    /// Failures in a row. The first is retried before the client hears of it.
+    failures: u32,
     stats: Stats,
     clipboard: SharedClipboard,
     cursor: Cursor,
@@ -122,6 +132,9 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
         bitrate: START_BITRATE,
         connected: false,
         paused: false,
+        retry_at: None,
+        retry_after: RETRY_FIRST,
+        failures: 0,
         stats: Stats::new(),
         clipboard: SharedClipboard::new(),
         cursor: Cursor::new(),
@@ -192,6 +205,10 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
             (id, message) = s.outgoing.next() => s.send_copied(id, message),
             _ = tick.tick() => {
                 ticks = ticks.wrapping_add(1);
+                if s.retry_at.is_some_and(|t| t <= Instant::now()) {
+                    s.retry_at = None;
+                    s.start_pipeline();
+                }
                 if s.control.is_some() && !s.paused {
                     if let Some(name) = s.cursor.changed() {
                         s.send(&HostMsg::Cursor { name: name.into() });
@@ -415,12 +432,19 @@ impl Session {
                     b.set_area(Area { x: origin.0, y: origin.1, width: size.0, height: size.1 });
                 }
                 self.display = Some(display.clone());
+                self.failures = 0;
+                self.retry_after = RETRY_FIRST;
                 let displays = crate::capture::displays().unwrap_or_default();
                 self.send(&HostMsg::Displays { displays, active: display });
             }
             PipelineEvent::Failed(message) => {
                 self.pipeline = None;
-                self.send(&HostMsg::Error { message });
+                self.failures += 1;
+                if self.failures > 1 {
+                    self.send(&HostMsg::Error { message });
+                }
+                self.retry_at = Some(Instant::now() + self.retry_after);
+                self.retry_after = (self.retry_after * 2).min(RETRY_MOST);
             }
         }
         Ok(())
