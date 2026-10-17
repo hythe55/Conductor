@@ -11,6 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::cli::Status;
+use crate::memory::WakeMemory;
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1200);
 const MAX_RESPONSE: usize = 256 * 1024;
@@ -22,7 +23,8 @@ fn can_host(os: &str) -> bool {
 
 /// Lists the owner's machines that can run Conductor, probing the online ones.
 /// `requester` marks the machine that asked, so it can leave itself out.
-pub async fn discover(status: &Status, requester: Option<IpAddr>) -> Vec<Device> {
+/// How to wake each one is kept in `memory` for when it's asleep.
+pub async fn discover(status: &Status, requester: Option<IpAddr>, memory: &WakeMemory) -> Vec<Device> {
     let Some(owner) = status.owner() else { return Vec::new() };
     let me = status.self_node.as_ref();
     let nodes = me
@@ -37,6 +39,13 @@ pub async fn discover(status: &Status, requester: Option<IpAddr>) -> Vec<Device>
             Some(ip) if node.online || is_self => probe(ip).await.ok(),
             _ => None,
         };
+        let wake = match host.as_ref().and_then(|h| h.wake.as_ref()) {
+            Some(wake) => {
+                memory.remember(&node.id, wake);
+                Some(wake.clone())
+            }
+            None => memory.recall(&node.id),
+        };
         Device {
             id: node.id.clone(),
             name: node.host_name.clone(),
@@ -46,6 +55,7 @@ pub async fn discover(status: &Status, requester: Option<IpAddr>) -> Vec<Device>
             online: node.online || is_self,
             last_seen: if node.online || is_self { None } else { node.last_seen().map(str::to_string) },
             host,
+            wake,
             is_self,
             is_you: requester.is_some_and(|r| node.tailscale_ips.contains(&r)),
         }

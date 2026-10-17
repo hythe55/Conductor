@@ -3,6 +3,8 @@
 
 mod cli;
 mod discover;
+mod memory;
 
 pub use cli::{Gate, Node, Status, UserProfile, status};
 pub use discover::{discover, get_json};
+pub use memory::WakeMemory;

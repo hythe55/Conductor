@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use conductor_proto::{Device, Route};
-use conductor_tailnet::{Gate, Status};
+use conductor_tailnet::{Gate, Status, WakeMemory};
 use tokio::sync::Mutex;
 
 /// How long a device list stays fresh. The list is only built when a client
@@ -29,6 +29,7 @@ pub struct AppState {
     next_session: AtomicU64,
     status: Mutex<(Status, Instant)>,
     devices: Mutex<Option<(Vec<Device>, Instant)>>,
+    wake_memory: WakeMemory,
     /// Names and addresses of the owner's own devices, lowercase.
     own_hosts: RwLock<HashSet<String>>,
 }
@@ -48,6 +49,7 @@ impl AppState {
             own_hosts: RwLock::new(own_hosts(&status)),
             status: Mutex::new((status, Instant::now())),
             devices: Mutex::new(None),
+            wake_memory: WakeMemory::open(crate::settings::data_dir().join("wake-peers.json")),
         });
         Ok(state)
     }
@@ -88,7 +90,7 @@ impl AppState {
             Some((list, at)) if at.elapsed() < DEVICES_TTL => list.clone(),
             _ => {
                 let status = self.status().await;
-                let list = conductor_tailnet::discover(&status, None).await;
+                let list = conductor_tailnet::discover(&status, None, &self.wake_memory).await;
                 *cached = Some((list.clone(), Instant::now()));
                 list
             }

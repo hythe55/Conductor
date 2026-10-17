@@ -8,12 +8,16 @@
 use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_TIMEOUT};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation, WAIT_TIMEOUT};
 use windows::Win32::Security::{
-    DuplicateTokenEx, SecurityImpersonation, SetTokenInformation, TOKEN_ALL_ACCESS, TokenPrimary, TokenSessionId,
+    DuplicateTokenEx, SECURITY_ATTRIBUTES, SecurityImpersonation, SetTokenInformation, TOKEN_ALL_ACCESS, TokenPrimary,
+    TokenSessionId,
 };
+use windows::Win32::Storage::FileSystem::ReadFile;
+use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -22,8 +26,8 @@ use windows::Win32::System::JobObjects::{
 use windows::Win32::System::RemoteDesktop::{WTSGetActiveConsoleSessionId, WTSQueryUserToken};
 use windows::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, GetCurrentProcess,
-    GetExitCodeProcess, OpenProcessToken, PROCESS_INFORMATION, ResumeThread, STARTUPINFOW, TerminateProcess,
-    WaitForSingleObject,
+    GetExitCodeProcess, OpenProcessToken, PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOW,
+    TerminateProcess, WaitForSingleObject,
 };
 use windows::core::{PCWSTR, PWSTR};
 
@@ -193,10 +197,109 @@ pub fn spawn_as_user(session: u32, exe: &Path) -> Result<()> {
     }
 }
 
+/// Runs `exe args` with a signed-in user's `token` and returns what it
+/// printed. It's stopped if it takes longer than `timeout`.
+pub fn output_as(token: HANDLE, exe: &Path, args: &str, timeout: Duration) -> Result<Vec<u8>> {
+    unsafe {
+        let inheritable = SECURITY_ATTRIBUTES {
+            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: std::ptr::null_mut(),
+            bInheritHandle: true.into(),
+        };
+        let (mut read, mut write) = (HANDLE::default(), HANDLE::default());
+        CreatePipe(&mut read, &mut write, Some(&inheritable), 0).context("CreatePipe")?;
+        let read = HandleGuard(read);
+        let write = HandleGuard(write);
+        // Only the child's end is inherited.
+        SetHandleInformation(read.0, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0)).context("SetHandleInformation")?;
+
+        let mut env: *mut c_void = std::ptr::null_mut();
+        CreateEnvironmentBlock(&mut env, Some(token), false).context("CreateEnvironmentBlock")?;
+        let mut desktop = wide(r"winsta0\default");
+        let si = STARTUPINFOW {
+            cb: size_of::<STARTUPINFOW>() as u32,
+            lpDesktop: PWSTR(desktop.as_mut_ptr()),
+            dwFlags: STARTF_USESTDHANDLES,
+            hStdOutput: write.0,
+            hStdError: write.0,
+            ..Default::default()
+        };
+        let exe_w = wide(exe);
+        let mut cmdline = wide(format!("\"{}\" {args}", exe.display()));
+        let mut pi = PROCESS_INFORMATION::default();
+        let created = CreateProcessAsUserW(
+            Some(token),
+            PCWSTR(exe_w.as_ptr()),
+            Some(PWSTR(cmdline.as_mut_ptr())),
+            None,
+            None,
+            true,
+            CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+            Some(env),
+            PCWSTR::null(),
+            &si,
+            &mut pi,
+        );
+        _ = DestroyEnvironmentBlock(env);
+        created.context("CreateProcessAsUser")?;
+        // Reading ends once the child, the only other holder of this end, exits.
+        drop(write);
+        _ = CloseHandle(pi.hThread);
+        let process = HandleGuard(pi.hProcess);
+
+        struct Reader(HandleGuard);
+        unsafe impl Send for Reader {}
+        let reader = Reader(read);
+        let reading = std::thread::spawn(move || {
+            let reader = reader;
+            let mut out = Vec::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                let mut n = 0;
+                if ReadFile(reader.0.0, Some(&mut buf), Some(&mut n), None).is_err() || n == 0 {
+                    return out;
+                }
+                out.extend_from_slice(&buf[..n as usize]);
+                if out.len() > 4 << 20 {
+                    return out;
+                }
+            }
+        });
+        if WaitForSingleObject(process.0, timeout.as_millis() as u32) == WAIT_TIMEOUT {
+            // Reading stops on its own once the pipe closes.
+            _ = TerminateProcess(process.0, 1);
+            anyhow::bail!("{} {args} took too long", exe.display());
+        }
+        Ok(reading.join().unwrap_or_default())
+    }
+}
+
 struct HandleGuard(HANDLE);
 
 impl Drop for HandleGuard {
     fn drop(&mut self) {
         unsafe { _ = CloseHandle(self.0) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output() {
+        unsafe {
+            let mut own = HANDLE::default();
+            OpenProcessToken(GetCurrentProcess(), TOKEN_ALL_ACCESS, &mut own).unwrap();
+            let mut token = HANDLE::default();
+            DuplicateTokenEx(own, TOKEN_ALL_ACCESS, None, SecurityImpersonation, TokenPrimary, &mut token).unwrap();
+            _ = CloseHandle(own);
+            let _guard = HandleGuard(token);
+            let cmd = Path::new(r"C:\Windows\System32\cmd.exe");
+            let out = output_as(token, cmd, "/c echo conductor", Duration::from_secs(10)).unwrap();
+            assert_eq!(String::from_utf8_lossy(&out).trim(), "conductor");
+            let slow = output_as(token, cmd, "/c ping -n 5 127.0.0.1", Duration::from_millis(300));
+            assert!(slow.unwrap_err().to_string().contains("took too long"));
+        }
     }
 }

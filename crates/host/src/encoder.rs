@@ -148,7 +148,7 @@ impl Encoder {
                 let name = friendly_name(&activate);
                 match Self::open(&activate, device, width, height, fps, bitrate, profile) {
                     Ok(mut enc) => {
-                        tracing::info!("encoder: {name} ({width}x{height}@{fps})");
+                        tracing::debug!("encoder: {name} ({width}x{height}@{fps})");
                         enc.name = name;
                         enc.hardware = hardware;
                         return Ok(enc);

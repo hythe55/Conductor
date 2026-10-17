@@ -160,6 +160,8 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params, mut route_rx: mpsc::Re
     let local = socket.local_addr()?;
     let (events_tx, mut events_rx) = mpsc::channel(32);
     let (sound_tx, mut sound_rx) = mpsc::channel(16);
+    // Files copied on this PC, read as the signed-in user, with the clipboard sequence number they go with.
+    let (hidden_tx, mut hidden_rx) = mpsc::channel(4);
     let mut s = Session {
         rtc,
         video: None,
@@ -279,11 +281,27 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params, mut route_rx: mpsc::Re
                             let msg = s.outgoing.offer(paths);
                             s.send(&msg);
                         }
-                        Some(Copied::Other) => s.withdraw_files(),
+                        Some(Copied::Other) => {
+                            s.withdraw_files();
+                            // They may be files that Windows hides from SYSTEM.
+                            let (tx, seen) = (hidden_tx.clone(), s.clipboard.seen);
+                            tokio::task::spawn_blocking(move || {
+                                _ = tx.blocking_send((seen, crate::files::copied_as_user()));
+                            });
+                        }
                         None => {}
                     }
                 }
             }
+            Some((seen, files)) = hidden_rx.recv() => match files {
+                // Unless something newer was copied meanwhile.
+                Ok(Some(paths)) if seen == s.clipboard.seen => {
+                    let msg = s.outgoing.offer(paths);
+                    s.send(&msg);
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("reading copied files as the signed-in user: {e:#}"),
+            },
             _ = tokio::time::sleep_until(timeout.into()) => {}
         }
     }
@@ -641,7 +659,7 @@ impl SharedClipboard {
         };
         if matches!(copied, Copied::Other) {
             let formats = conductor_clipboard::formats().unwrap_or_default();
-            tracing::info!("copied something that isn't text or files (formats {formats:?})");
+            tracing::debug!("copied something that isn't text or files here (formats {formats:?})");
         }
         self.seen = now;
         match copied {

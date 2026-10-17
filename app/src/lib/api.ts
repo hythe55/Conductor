@@ -1,5 +1,5 @@
 import { Problem } from './errors'
-import type { Device, HostInfo } from './types'
+import type { Device, HostInfo, PowerAction, WakeAdapter, WakeInfo } from './types'
 
 /** Base URL of a host's API. Empty string means the host serving this page. */
 export type HostUrl = string
@@ -22,6 +22,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     )
   }
   if (!res.ok) throw new Problem("That PC couldn't handle the request. Try again, or restart it.", await detail())
+  if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
 }
 
@@ -56,4 +57,32 @@ export async function createSession(host: HostUrl, sdp: string, opts: SessionOpt
     body: JSON.stringify({ sdp, ...opts }),
   })
   return res.sdp
+}
+
+function post<T>(url: string, body: unknown): Promise<T> {
+  return request(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+}
+
+/** Whether the host answers right now. */
+export async function reachable(host: HostUrl): Promise<boolean> {
+  try {
+    await request(`${host}/api/info`, { signal: AbortSignal.timeout(3000) })
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function power(host: HostUrl, action: PowerAction): Promise<void> {
+  return post(`${host}/api/power`, { action })
+}
+
+/** Asks `host` to send wake packets to another PC on its network. */
+export function wake(host: HostUrl, adapters: WakeAdapter[]): Promise<void> {
+  return post(`${host}/api/wake`, { adapters })
+}
+
+/** Tells a PC that just woke from a test that waking it works. */
+export function confirmWake(host: HostUrl): Promise<WakeInfo> {
+  return post(`${host}/api/wake/confirm`, {})
 }

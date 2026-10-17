@@ -21,6 +21,14 @@ pub fn run() {
             _ = window.set_focus();
         }
     }));
+    // How to wake the owner's PCs, remembered from when they were last online.
+    #[cfg(windows)]
+    let builder = builder.setup(|app| {
+        use tauri::Manager;
+        let path = app.path().app_local_data_dir()?.join("wake-peers.json");
+        app.manage(conductor_tailnet::WakeMemory::open(path));
+        Ok(())
+    });
     #[cfg(windows)]
     let builder = builder.manage(downloads::Saving::default()).invoke_handler(tauri::generate_handler![
         local::devices,

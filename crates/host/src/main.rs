@@ -29,6 +29,7 @@ mod settings;
 mod spawn;
 mod state;
 mod update;
+mod wake;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -45,6 +46,8 @@ enum Mode {
     Service,
     Install,
     Uninstall,
+    /// Prints the files on the clipboard; run as the user by the agent.
+    CopiedFiles,
 }
 
 struct Args {
@@ -64,6 +67,7 @@ fn parse_args() -> Result<Args> {
             "service" => mode = Mode::Service,
             "install" => mode = Mode::Install,
             "uninstall" => mode = Mode::Uninstall,
+            "copied-files" => mode = Mode::CopiedFiles,
             "--port" => port = it.next().context("--port needs a value")?.parse()?,
             "--web-dir" => web_dir = Some(PathBuf::from(it.next().context("--web-dir needs a value")?)),
             other => anyhow::bail!("unknown argument {other}"),
@@ -99,6 +103,7 @@ fn main() -> Result<()> {
             init_logging(None);
             install::uninstall()
         }
+        Mode::CopiedFiles => files::print_copied(),
         Mode::Service => {
             // Before anything is written there as SYSTEM.
             let secured = settings::secure_data_dir();
@@ -144,6 +149,7 @@ async fn wait_for_tailscale() -> conductor_tailnet::Status {
 async fn serve(args: Args) -> Result<()> {
     dpi_aware();
     str0m::crypto::from_feature_flags().install_process_default();
+    wake::watch_resume();
 
     let status = wait_for_tailscale().await;
     let ip = status.self_node.as_ref().and_then(|n| n.ipv4()).context("no Tailscale IPv4 address")?;

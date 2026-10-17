@@ -3,6 +3,8 @@
 //! HTTP bodies and data-channel messages are JSON. Data-channel messages are
 //! tagged with `t` so the web client can switch on a short string.
 
+use std::net::Ipv4Addr;
+
 use serde::{Deserialize, Serialize};
 
 pub mod files;
@@ -79,6 +81,68 @@ pub struct HostInfo {
     /// Names of the devices controlling this PC right now.
     #[serde(default)]
     pub controllers: Vec<String>,
+    /// What another PC on the same network needs to wake this one. Missing
+    /// from hosts older than 0.1.8, which also can't sleep, restart or shut
+    /// down when asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wake: Option<WakeInfo>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WakeInfo {
+    /// Wired and Wi-Fi adapters with an address on a local network.
+    pub adapters: Vec<WakeAdapter>,
+    /// A test wake has worked through one of these adapters.
+    #[serde(default)]
+    pub verified: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WakeAdapter {
+    /// MAC address, lowercase with colons.
+    pub mac: String,
+    /// IPv4 address on the local network.
+    pub address: Ipv4Addr,
+    /// Length of the network's prefix, e.g. 24 for 255.255.255.0.
+    pub prefix: u8,
+}
+
+impl WakeAdapter {
+    /// The network this adapter is on, as (address, prefix).
+    pub fn network(&self) -> (u32, u8) {
+        let prefix = self.prefix.min(32);
+        let mask = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix) };
+        (u32::from(self.address) & mask, prefix)
+    }
+
+    /// Both adapters are on the same local network.
+    pub fn shares_network(&self, other: &WakeAdapter) -> bool {
+        self.network() == other.network()
+    }
+}
+
+/// Body of `POST /api/wake`: the adapters of the PC to wake.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WakeRequest {
+    pub adapters: Vec<WakeAdapter>,
+}
+
+/// Body of `POST /api/power`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PowerRequest {
+    pub action: PowerAction,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum PowerAction {
+    Sleep,
+    Restart,
+    ShutDown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -116,6 +180,10 @@ pub struct Device {
     pub last_seen: Option<String>,
     /// Present when Conductor is running there and answered.
     pub host: Option<HostInfo>,
+    /// How to wake it: from `host` when online, or remembered from when it
+    /// last was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wake: Option<WakeInfo>,
     /// The machine that produced this list.
     #[serde(default)]
     pub is_self: bool,
@@ -289,6 +357,17 @@ pub enum FileReply {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wake_networks() {
+        let a = |address: &str, prefix| WakeAdapter { mac: String::new(), address: address.parse().unwrap(), prefix };
+        assert!(a("192.168.1.20", 24).shares_network(&a("192.168.1.7", 24)));
+        assert!(!a("192.168.1.20", 24).shares_network(&a("192.168.2.7", 24)));
+        assert!(!a("192.168.1.20", 24).shares_network(&a("192.168.1.7", 16)));
+        assert!(a("10.0.5.1", 0).shares_network(&a("172.16.0.1", 0)));
+        let power: PowerRequest = serde_json::from_str(r#"{"action":"shutDown"}"#).unwrap();
+        assert_eq!(power.action, PowerAction::ShutDown);
+    }
 
     #[test]
     fn client_msg_wire_format() {

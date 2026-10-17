@@ -19,7 +19,28 @@ export interface HostInfo {
   displays: DisplayInfo[]
   /** Devices controlling this PC right now. */
   controllers?: string[]
+  /**
+   * What another PC on the same network needs to wake this one. Missing
+   * before 0.1.8, which also can't sleep, restart or shut down when asked.
+   */
+  wake?: WakeInfo
 }
+
+export interface WakeInfo {
+  /** Wired and Wi-Fi adapters with an address on a local network. */
+  adapters: WakeAdapter[]
+  /** A test wake has worked, so waking is offered while it's asleep. */
+  verified: boolean
+}
+
+export interface WakeAdapter {
+  mac: string
+  /** IPv4 address on the local network. */
+  address: string
+  prefix: number
+}
+
+export type PowerAction = 'sleep' | 'restart' | 'shutDown'
 
 export interface Device {
   id: string
@@ -31,6 +52,8 @@ export interface Device {
   /** For offline devices, when Tailscale last heard from them (ISO 8601). */
   lastSeen?: string
   host: HostInfo | null
+  /** How to wake it, remembered from when it was last online. */
+  wake?: WakeInfo
   isSelf: boolean
   isYou: boolean
 }

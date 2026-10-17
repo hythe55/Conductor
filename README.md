@@ -9,6 +9,7 @@ Control your Windows PCs from your other devices, over your own [Tailscale](http
 - Copy and paste text between PCs, and send or save files
 - Shows who's in control on the PC's screen, or covers the screen so nobody at the PC sees what you're doing
 - Sends nothing while nobody is watching, and nothing for sound while it's quiet
+- Sleep, restart or shut down a PC from your other devices, and wake it again from another PC on its network once a test wake has worked
 - Updates itself from GitHub releases when nobody is using it
 - Control from the Windows app, the Android app, or any browser on your tailnet
 
@@ -63,8 +64,7 @@ The installer ends up in `target/release/bundle/nsis/`. To run the host without 
 - Android app with touch controls
 - Virtual displays, sized to the device you're controlling from
 - Sound even when the PC's own speakers are muted
-- Wake-on-LAN, shown only after a test wake succeeds
-- Power actions and scheduled sleep, shutdown and restart
+- Scheduled sleep, shutdown and restart
 
 ## License
 

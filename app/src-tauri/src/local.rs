@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use conductor_proto::{CONTROL_PIPE, ControlRequest, ControlStatus, Device};
+use conductor_tailnet::WakeMemory;
 use serde::Serialize;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::windows::named_pipe::ClientOptions;
@@ -25,7 +26,7 @@ const NO_SERVICE: &str = "Couldn't reach the Conductor service on this PC. Resta
 
 /// The owner's PCs on the tailnet, with this one marked as "you".
 #[tauri::command]
-pub async fn devices() -> Result<Vec<Device>, Problem> {
+pub async fn devices(memory: tauri::State<'_, WakeMemory>) -> Result<Vec<Device>, Problem> {
     let status = conductor_tailnet::status()
         .await
         .map_err(|e| Problem::new("Tailscale isn't running on this PC. Open Tailscale and sign in.", format!("{e:#}")))?;
@@ -35,7 +36,7 @@ pub async fn devices() -> Result<Vec<Device>, Problem> {
             format!("Tailscale state: {}", status.backend_state),
         ));
     }
-    let mut list = conductor_tailnet::discover(&status, None).await;
+    let mut list = conductor_tailnet::discover(&status, None, &memory).await;
     for d in &mut list {
         d.is_you = d.is_self;
     }

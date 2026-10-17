@@ -16,6 +16,7 @@ use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::task::Poll;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use conductor_proto::files::create_unique;
@@ -336,6 +337,25 @@ fn create(name: &str) -> Result<(PathBuf, File)> {
 }
 
 /// Whoever is signed in to the session this process runs in.
+/// The files on the clipboard as the signed-in user sees them, or `None` when
+/// they copied something else. Windows hides copied files from SYSTEM, so the
+/// agent asks a copy of itself running as that user. Run by hand, this
+/// process already is the user and nothing is hidden.
+pub fn copied_as_user() -> Result<Option<Vec<PathBuf>>> {
+    let user = User::signed_in()?;
+    let Some(token) = user.0 else { return Ok(None) };
+    let exe = std::env::current_exe().context("finding conductor-host.exe")?;
+    let out = crate::spawn::output_as(token, &exe, "copied-files", Duration::from_secs(5))?;
+    serde_json::from_slice(&out).context("reading the copied files")
+}
+
+/// Prints the files on the clipboard as JSON, for [`copied_as_user`].
+pub fn print_copied() -> Result<()> {
+    let files = conductor_clipboard::read_files()?;
+    println!("{}", serde_json::to_string(&files)?);
+    Ok(())
+}
+
 struct User(Option<HANDLE>);
 
 impl User {

@@ -9,7 +9,9 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use conductor_proto::{Device, HostInfo, PROTOCOL_VERSION, SessionRequest, SessionResponse};
+use conductor_proto::{
+    Device, HostInfo, PROTOCOL_VERSION, PowerRequest, SessionRequest, SessionResponse, WakeInfo, WakeRequest,
+};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -31,6 +33,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/info", get(info))
         .route("/api/devices", get(devices))
         .route("/api/session", post(create_session))
+        .route("/api/wake", post(wake))
+        .route("/api/wake/confirm", post(confirm_wake))
+        .route("/api/power", post(power))
         .fallback_service(ServeDir::new(&state.web_dir).fallback(ServeFile::new(index)))
         .layer(middleware::from_fn(revalidate_pages))
         .layer(cors)
@@ -138,6 +143,43 @@ pub fn host_info(state: &AppState) -> HostInfo {
         os: "windows".into(),
         displays: crate::capture::displays().unwrap_or_default(),
         controllers: state.controllers(),
+        wake: Some(crate::wake::info()),
+    }
+}
+
+/// Wakes another of the owner's PCs on this PC's network.
+async fn wake(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(req): Json<WakeRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    tracing::info!("{} asked to wake a PC", state.device_name(peer.ip()).await);
+    match crate::wake::send(&req.adapters).await {
+        Ok(()) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => {
+            tracing::warn!("waking: {e:#}");
+            Err((StatusCode::CONFLICT, format!("{e:#}")))
+        }
+    }
+}
+
+/// Called after a test wake brings this PC back, so waking it is offered from now on.
+async fn confirm_wake() -> Result<Json<WakeInfo>, (StatusCode, String)> {
+    crate::wake::confirm().map(Json).map_err(|e| (StatusCode::CONFLICT, format!("{e:#}")))
+}
+
+async fn power(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(req): Json<PowerRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    tracing::info!("{} asked this PC to {:?}", state.device_name(peer.ip()).await, req.action);
+    match crate::power::act(req.action) {
+        Ok(()) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => {
+            tracing::warn!("{:?}: {e:#}", req.action);
+            Err((StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))
+        }
     }
 }
 
