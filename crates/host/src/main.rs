@@ -21,6 +21,7 @@ mod indicator;
 mod input;
 mod install;
 mod pipeline;
+mod power;
 mod server;
 mod service;
 mod session;

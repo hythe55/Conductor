@@ -24,6 +24,7 @@ use crate::cursor::Cursor;
 use crate::encoder::Profile;
 use crate::files::{Incoming, Outgoing};
 use crate::indicator::{Area, Banner};
+use crate::power::KeepAwake;
 use crate::input::Injector;
 use crate::pipeline::{Config, Control, Pipeline, PipelineEvent};
 use crate::state::AppState;
@@ -119,6 +120,7 @@ struct Session {
     banner: Option<Banner>,
     /// Cover this PC's displays while the session lasts.
     hide_screen: bool,
+    awake: Option<KeepAwake>,
     max_size: (u32, u32),
     bitrate: u32,
     connected: bool,
@@ -174,6 +176,7 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params, mut route_rx: mpsc::Re
         controller: params.controller,
         banner: None,
         hide_screen: false,
+        awake: None,
         max_size: params.max_size,
         bitrate: START_BITRATE,
         connected: false,
@@ -297,6 +300,7 @@ impl Session {
                 let banner = Banner::new(self.controller.clone());
                 banner.hide_screen(self.hide_screen);
                 self.banner = Some(banner);
+                self.awake = KeepAwake::new(&self.controller);
                 self.start_pipeline();
                 self.start_sound();
             }
