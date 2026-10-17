@@ -3,6 +3,9 @@ name: Release
 # To release: set the new version in Cargo.toml, app/package.json and
 # app/src-tauri/tauri.conf.json, commit, then push a matching tag (v0.2.0).
 # Installed copies find the release within a few hours and update themselves.
+# The Android app is added to the release once the Windows build is out, if
+# the ANDROID_KEYSTORE_BASE64 and ANDROID_KEYSTORE_PASSWORD secrets are set
+# (a PKCS12 keystore whose key is called "conductor", with one password).
 on:
   push:
     tags: ['v*.*.*']
@@ -83,3 +86,64 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${{ github.ref_name }}" release/* --title "Conductor ${{ env.VERSION }}" --generate-notes
+
+  android-key:
+    runs-on: ubuntu-latest
+    outputs:
+      present: ${{ steps.check.outputs.present }}
+    steps:
+      - id: check
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: echo "present=$([ -n "$KEYSTORE" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+  android:
+    # After the Windows release, so a failed Android build never holds up updates.
+    needs: [windows, android-key]
+    if: needs.android-key.outputs.present == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install
+        working-directory: app
+        run: npm ci
+
+      # Read by app/src-tauri/gen/android/app/build.gradle.kts.
+      - name: Signing key
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          echo "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          printf 'storeFile=%s
+keyAlias=conductor
+password=%s
+' "$RUNNER_TEMP/release.jks" "$PASSWORD" > app/src-tauri/gen/android/keystore.properties
+
+      - name: Build
+        working-directory: app
+        run: NDK_HOME="$ANDROID_NDK_LATEST_HOME" npx tauri android build --apk --target aarch64 --ci
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          apk=$(find app/src-tauri/gen/android/app/build/outputs/apk -name '*-release.apk' | head -n 1)
+          if [ -z "$apk" ]; then echo "No signed APK was built"; exit 1; fi
+          name="Conductor_${TAG#v}_android-arm64.apk"
+          cp "$apk" "$name"
+          gh release upload "$TAG" "$name"
