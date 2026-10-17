@@ -1,0 +1,99 @@
+//! Connect host: makes this PC controllable from your other tailnet devices.
+
+mod capture;
+mod convert;
+mod displays;
+mod encoder;
+mod input;
+mod pipeline;
+mod server;
+mod session;
+mod state;
+mod tailscale;
+
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use tracing_subscriber::EnvFilter;
+
+struct Args {
+    port: u16,
+    web_dir: PathBuf,
+}
+
+fn parse_args() -> Result<Args> {
+    let mut port = connect_proto::DEFAULT_PORT;
+    let mut web_dir = None;
+    let mut it = std::env::args().skip(1);
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--port" => port = it.next().context("--port needs a value")?.parse()?,
+            "--web-dir" => web_dir = Some(PathBuf::from(it.next().context("--web-dir needs a value")?)),
+            other => anyhow::bail!("unknown argument {other}"),
+        }
+    }
+    let web_dir = web_dir.unwrap_or_else(|| {
+        let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.to_path_buf()));
+        let bundled = exe_dir.map(|d| d.join("web"));
+        match bundled {
+            Some(d) if d.join("index.html").exists() => d,
+            _ => PathBuf::from("app/dist"),
+        }
+    });
+    Ok(Args { port, web_dir })
+}
+
+fn dpi_aware() {
+    use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext};
+    unsafe { _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+}
+
+async fn wait_for_tailscale() -> tailscale::Status {
+    let mut warned = false;
+    loop {
+        match tailscale::status().await {
+            Ok(s) if s.backend_state == "Running" && s.self_node.is_some() => return s,
+            Ok(s) if !warned => tracing::warn!("waiting for Tailscale (state: {})", s.backend_state),
+            Err(e) if !warned => tracing::warn!("waiting for Tailscale: {e:#}"),
+            _ => {}
+        }
+        warned = true;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,str0m=warn")))
+        .init();
+    dpi_aware();
+    str0m::crypto::from_feature_flags().install_process_default();
+    let args = parse_args()?;
+
+    let status = wait_for_tailscale().await;
+    let me = status.self_node.as_ref().unwrap();
+    let ip = me.tailscale_ips.iter().copied().find(IpAddr::is_ipv4).context("no Tailscale IPv4 address")?;
+    let gate = tailscale::Gate::new(&status)?;
+    let state = state::AppState::new(me.host_name.clone(), ip, gate, args.web_dir.clone());
+
+    let app = server::router(state.clone());
+    let mut servers = Vec::new();
+    for addr in [SocketAddr::new(ip, args.port), SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), args.port)] {
+        let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("binding {addr}"))?;
+        let app = app.clone().into_make_service_with_connect_info::<SocketAddr>();
+        servers.push(tokio::spawn(async move { axum::serve(listener, app).await }));
+    }
+    tracing::info!(
+        "Connect host ready: http://{}:{} (web client from {})",
+        me.host_name,
+        args.port,
+        args.web_dir.display()
+    );
+    for s in servers {
+        s.await??;
+    }
+    Ok(())
+}
