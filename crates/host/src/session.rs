@@ -2,11 +2,12 @@
 //! client's control channel, the capture pipeline and input injection.
 
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use conductor_proto::{ClientMsg, FILE_CHANNEL, HostMsg};
+use conductor_proto::{COPIED_CHANNEL, ClientMsg, FILE_CHANNEL, FileReply, HostMsg};
 use str0m::bwe::{Bitrate, BweKind};
 use str0m::change::SdpOffer;
 use str0m::channel::ChannelId;
@@ -20,7 +21,7 @@ use tokio::sync::mpsc;
 
 use crate::cursor::Cursor;
 use crate::encoder::Profile;
-use crate::files::Incoming;
+use crate::files::{Incoming, Outgoing};
 use crate::indicator::{Area, Banner};
 use crate::input::Injector;
 use crate::pipeline::{Config, Control, Pipeline, PipelineEvent};
@@ -41,6 +42,9 @@ const CLIPBOARD_TICKS: u32 = 5;
 /// Clipboard text bigger than this isn't shared. Data channel messages can be
 /// up to 256 KiB both ways, and JSON escaping can make text longer.
 const CLIPBOARD_MAX: usize = 120 * 1024;
+/// How much the data channels may queue in all. Files waiting to go out use
+/// at most a quarter, so messages on the control channel always fit.
+const CHANNELS_QUEUED_MAX: usize = 4 << 20;
 
 pub struct Params {
     /// Name of the device asking to control this PC, for the on-screen banner.
@@ -63,6 +67,7 @@ pub async fn start(state: Arc<AppState>, bind_ip: IpAddr, params: Params) -> Res
         .enable_opus(true, false)
         .set_extension(6, Extension::PlayoutDelay)
         .enable_bwe(Some(Bitrate::bps(START_BITRATE as u64)))
+        .set_sctp_max_buffered_amount(CHANNELS_QUEUED_MAX)
         .build(Instant::now());
     rtc.add_local_candidate(Candidate::host(local, "udp")?);
     let answer = rtc.sdp_api().accept_offer(offer).context("rejecting offer")?;
@@ -96,7 +101,8 @@ struct Session {
     stats: Stats,
     clipboard: SharedClipboard,
     cursor: Cursor,
-    files: Incoming,
+    incoming: Incoming,
+    outgoing: Outgoing,
 }
 
 async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
@@ -119,7 +125,8 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
         stats: Stats::new(),
         clipboard: SharedClipboard::new(),
         cursor: Cursor::new(),
-        files: Incoming::default(),
+        incoming: Incoming::default(),
+        outgoing: Outgoing::default(),
     };
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -163,6 +170,7 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
         if last_rx.elapsed() > IDLE_TIMEOUT {
             anyhow::bail!("client stopped responding");
         }
+        s.outgoing.measure(&mut s.rtc);
 
         tokio::select! {
             r = socket.recv_from(&mut buf) => {
@@ -181,6 +189,7 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
                 ))?;
             }
             Some(ev) = events_rx.recv() => s.handle_pipeline(ev)?,
+            (id, message) = s.outgoing.next() => s.send_copied(id, message),
             _ = tick.tick() => {
                 ticks = ticks.wrapping_add(1);
                 if s.control.is_some() && !s.paused {
@@ -189,8 +198,17 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
                     }
                 }
                 if ticks % CLIPBOARD_TICKS == 0 {
-                    if let Some(text) = s.clipboard.copied() {
-                        s.send(&HostMsg::Clipboard { text });
+                    match s.clipboard.copied() {
+                        Some(Copied::Text(text)) => {
+                            s.send(&HostMsg::Clipboard { text });
+                            s.withdraw_files();
+                        }
+                        Some(Copied::Files(paths)) => {
+                            let msg = s.outgoing.offer(paths);
+                            s.send(&msg);
+                        }
+                        Some(Copied::Other) => s.withdraw_files(),
+                        None => {}
                     }
                 }
             }
@@ -227,17 +245,25 @@ impl Session {
                 if label == "control" {
                     self.control = Some(id);
                 } else if label == FILE_CHANNEL {
-                    self.files.open(id);
+                    self.incoming.open(id);
+                } else if label == COPIED_CHANNEL {
+                    self.outgoing.open(id);
                 }
             }
             // The client closed its connection on purpose.
             Event::ChannelClose(id) if Some(id) == self.control => return Ok(false),
-            Event::ChannelClose(id) => self.files.close(id),
-            Event::ChannelData(d) if self.files.has(d.id) => {
-                if let Some(reply) = self.files.receive(d.id, d.binary, &d.data) {
-                    if let (Some(mut ch), Ok(json)) = (self.rtc.channel(d.id), serde_json::to_vec(&reply)) {
-                        _ = ch.write(false, &json);
-                    }
+            Event::ChannelClose(id) => {
+                self.incoming.close(id);
+                self.outgoing.close(id);
+            }
+            Event::ChannelData(d) if self.incoming.has(d.id) => {
+                if let Some(reply) = self.incoming.receive(d.id, d.binary, &d.data) {
+                    self.reply(d.id, &reply);
+                }
+            }
+            Event::ChannelData(d) if self.outgoing.has(d.id) => {
+                if let Some(reply) = self.outgoing.request(d.id, &d.data) {
+                    self.reply(d.id, &reply);
                 }
             }
             Event::ChannelData(d) if Some(d.id) == self.control => {
@@ -324,7 +350,11 @@ impl Session {
                     self.start_pipeline();
                 }
             }
-            ClientMsg::Clipboard { text } => self.clipboard.paste(text),
+            ClientMsg::Clipboard { text } => {
+                if self.clipboard.paste(text) {
+                    self.withdraw_files();
+                }
+            }
         }
     }
 
@@ -333,6 +363,35 @@ impl Session {
         let Some(mut ch) = self.rtc.channel(id) else { return };
         if let Ok(json) = serde_json::to_vec(msg) {
             _ = ch.write(false, &json);
+        }
+    }
+
+    /// Answers on a file channel.
+    fn reply(&mut self, id: ChannelId, reply: &FileReply) {
+        if let (Some(mut ch), Ok(json)) = (self.rtc.channel(id), serde_json::to_vec(reply)) {
+            _ = ch.write(false, &json);
+        }
+    }
+
+    /// Files copied on this PC are no longer on its clipboard.
+    fn withdraw_files(&mut self) {
+        if let Some(msg) = self.outgoing.withdraw() {
+            self.send(&msg);
+        }
+    }
+
+    /// Passes on part of a copied file the client is fetching.
+    fn send_copied(&mut self, id: ChannelId, message: Option<(bool, Vec<u8>)>) {
+        let Some((binary, data)) = message else {
+            self.outgoing.read(id);
+            return;
+        };
+        let written = self.rtc.channel(id).map(|mut ch| ch.write(binary, &data));
+        if !matches!(written, Some(Ok(true))) {
+            // Measuring before each message should leave room for it.
+            tracing::warn!("couldn't queue part of a copied file: {written:?}");
+            self.outgoing.close(id);
+            self.rtc.direct_api().close_data_channel(id);
         }
     }
 
@@ -404,7 +463,16 @@ impl Stats {
     }
 }
 
-/// Keeps this PC's clipboard and the client's in step, for text.
+/// Something newly copied on this PC.
+enum Copied {
+    Text(String),
+    Files(Vec<PathBuf>),
+    /// Something else, or text too big to share.
+    Other,
+}
+
+/// Keeps this PC's clipboard and the client's in step, for text, and notices
+/// copied files.
 struct SharedClipboard {
     /// Clipboard sequence number last looked at.
     seen: u32,
@@ -418,42 +486,58 @@ impl SharedClipboard {
         Self { seen: conductor_clipboard::sequence(), shared: None }
     }
 
-    /// New text copied on this PC since the last call.
-    fn copied(&mut self) -> Option<String> {
+    /// What was copied on this PC since the last call, unless it's text the
+    /// client already has.
+    fn copied(&mut self) -> Option<Copied> {
         let now = conductor_clipboard::sequence();
         if now == self.seen {
             return None;
         }
-        let text = match conductor_clipboard::read_text(CLIPBOARD_MAX) {
-            Ok(text) => {
-                self.seen = now;
-                // Something other than text, or too much of it.
-                text?
-            }
+        let read = conductor_clipboard::read_files().and_then(|files| match files {
+            Some(files) => Ok(Copied::Files(files)),
+            None => Ok(conductor_clipboard::read_text(CLIPBOARD_MAX)?.map_or(Copied::Other, Copied::Text)),
+        });
+        let copied = match read {
+            Ok(copied) => copied,
             Err(e) => {
                 // Try again next time.
                 tracing::debug!("reading the clipboard: {e:#}");
                 return None;
             }
         };
-        if self.shared.as_ref() == Some(&text) {
-            return None;
+        self.seen = now;
+        match copied {
+            Copied::Text(text) if self.shared.as_ref() == Some(&text) => None,
+            Copied::Text(text) => {
+                self.shared = Some(text.clone());
+                Some(Copied::Text(text))
+            }
+            other => {
+                self.shared = None;
+                Some(other)
+            }
         }
-        self.shared = Some(text.clone());
-        Some(text)
     }
 
-    /// Puts text copied on the client on this PC's clipboard.
-    fn paste(&mut self, text: String) {
-        if text.len() > CLIPBOARD_MAX || self.shared.as_ref() == Some(&text) {
-            return;
+    /// Puts text copied on the client on this PC's clipboard. Returns whether
+    /// the clipboard holds it now.
+    fn paste(&mut self, text: String) -> bool {
+        if text.len() > CLIPBOARD_MAX {
+            return false;
+        }
+        if self.shared.as_ref() == Some(&text) {
+            return true;
         }
         match conductor_clipboard::write_text(&text) {
             Ok(()) => {
                 self.seen = conductor_clipboard::sequence();
                 self.shared = Some(text);
+                true
             }
-            Err(e) => tracing::warn!("couldn't set the clipboard: {e:#}"),
+            Err(e) => {
+                tracing::warn!("couldn't set the clipboard: {e:#}");
+                false
+            }
         }
     }
 }

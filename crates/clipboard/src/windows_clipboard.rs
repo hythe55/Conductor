@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -7,7 +8,8 @@ use windows::Win32::System::DataExchange::{
     OpenClipboard, SetClipboardData,
 };
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock};
-use windows::Win32::System::Ole::CF_UNICODETEXT;
+use windows::Win32::System::Ole::{CF_HDROP, CF_UNICODETEXT};
+use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 
 /// Changes whenever anything puts something new on the clipboard.
 pub fn sequence() -> u32 {
@@ -60,6 +62,29 @@ pub fn read_text(max_bytes: usize) -> Result<Option<String>> {
         let text = String::from_utf16_lossy(&units[..end]);
         _ = GlobalUnlock(memory);
         Ok((text.len() <= max_bytes).then_some(text))
+    }
+}
+
+/// The files copied in Explorer (or anything else that copies files), or None
+/// when the clipboard holds something else.
+pub fn read_files() -> Result<Option<Vec<PathBuf>>> {
+    let format = u32::from(CF_HDROP.0);
+    unsafe {
+        if IsClipboardFormatAvailable(format).is_err() {
+            return Ok(None);
+        }
+        let _open = Open::new()?;
+        let Ok(handle) = GetClipboardData(format) else { return Ok(None) };
+        let drop = HDROP(handle.0);
+        let count = DragQueryFileW(drop, u32::MAX, None);
+        let mut files = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            let len = DragQueryFileW(drop, i, None) as usize;
+            let mut buf = vec![0u16; len + 1];
+            let len = DragQueryFileW(drop, i, Some(&mut buf)) as usize;
+            files.push(PathBuf::from(String::from_utf16_lossy(&buf[..len])));
+        }
+        Ok(Some(files))
     }
 }
 

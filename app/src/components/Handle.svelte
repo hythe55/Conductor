@@ -21,6 +21,10 @@
     notice: Notice | null
     /** Files are on their way to the remote PC. */
     sending: boolean
+    /** Files copied on the remote PC are being saved here. */
+    saving: boolean
+    /** How many files copied on the remote PC can be saved here. */
+    copiedFiles: number
     displays: DisplayInfo[]
     activeDisplay: string
     fullscreen: boolean
@@ -32,6 +36,8 @@
     onkeyboard?: () => void
     onsendfiles: () => void
     onstopsending: () => void
+    onsavecopied: () => void
+    onstopsaving: () => void
     ondisconnect: () => void
   }
 
@@ -41,6 +47,8 @@
     reconnecting,
     notice,
     sending,
+    saving,
+    copiedFiles,
     displays,
     activeDisplay,
     fullscreen,
@@ -51,6 +59,8 @@
     onkeyboard,
     onsendfiles,
     onstopsending,
+    onsavecopied,
+    onstopsaving,
     ondisconnect,
   }: Props = $props()
 
@@ -127,10 +137,10 @@
   let awake = $state(true)
   let timer: number | undefined
 
-  function wake() {
+  function wake(ms = 2500) {
     awake = true
     clearTimeout(timer)
-    timer = window.setTimeout(() => (awake = false), 2500)
+    timer = window.setTimeout(() => (awake = false), ms)
   }
 
   $effect(() => {
@@ -206,9 +216,9 @@
   )
   const problem = $derived(notice?.problem ?? null)
 
-  // Show the handle when something new is going on, so the chip is seen.
+  // Show the handle when something new is going on, for as long as a passing note lasts.
   $effect(() => {
-    if (notice) wake()
+    if (notice) wake(4000)
   })
 </script>
 
@@ -222,7 +232,7 @@
 <!-- Touch screens can't bring the handle back by hovering, so there it dims instead of hiding. -->
 <div
   class="handle-area"
-  class:visible={awake || open || reconnecting || !!problem || sending}
+  class:visible={awake || open || reconnecting || !!problem || sending || saving}
   class:coarse
   style:left="{handleCenter}px"
   bind:offsetWidth={handleWidth}
@@ -240,7 +250,7 @@
     onpointerup={onHandleUp}
     onpointercancel={onHandleUp}
     onclick={onHandleClick}
-    onfocus={wake}
+    onfocus={() => wake()}
   >
     {#if status}
       <span class="chip" class:warning={status.warning}
@@ -298,7 +308,18 @@
         {#if sending}
           <button class="item" role="menuitem" tabindex="-1" onclick={() => run(onstopsending)}>
             <span class="check"></span>
-            <span class="text">Stop sending files</span>
+            <span class="text">Stop sending</span>
+          </button>
+        {/if}
+        {#if saving}
+          <button class="item" role="menuitem" tabindex="-1" onclick={() => run(onstopsaving)}>
+            <span class="check"></span>
+            <span class="text">Stop saving</span>
+          </button>
+        {:else if copiedFiles}
+          <button class="item" role="menuitem" tabindex="-1" onclick={() => run(onsavecopied)}>
+            <span class="check"></span>
+            <span class="text">{copiedFiles === 1 ? 'Save copied file' : `Save ${copiedFiles} copied files`}</span>
           </button>
         {/if}
         {#if canFullscreen}

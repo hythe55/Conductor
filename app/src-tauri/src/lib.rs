@@ -1,7 +1,10 @@
 //! Conductor app shell. The interface is the same web client every host
 //! serves; this adds what a browser can't do on its own: read the tailnet
-//! device list and switch hosting for this PC on or off.
+//! device list, switch hosting for this PC on or off, and save files from
+//! the PC being controlled.
 
+#[cfg(windows)]
+mod downloads;
 #[cfg(windows)]
 mod local;
 
@@ -19,7 +22,7 @@ pub fn run() {
         }
     }));
     #[cfg(windows)]
-    let builder = builder.invoke_handler(tauri::generate_handler![
+    let builder = builder.manage(downloads::Saving::default()).invoke_handler(tauri::generate_handler![
         local::devices,
         local::host_status,
         local::set_hosting,
@@ -28,6 +31,10 @@ pub fn run() {
         local::install_update,
         local::read_clipboard,
         local::write_clipboard,
+        downloads::begin_save,
+        downloads::write_save,
+        downloads::end_save,
+        downloads::abort_save,
     ]);
     builder.run(tauri::generate_context!()).expect("error while running Conductor");
 }

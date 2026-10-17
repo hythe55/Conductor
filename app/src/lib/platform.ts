@@ -1,6 +1,7 @@
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, type InvokeArgs, type InvokeOptions } from '@tauri-apps/api/core'
 import { devices as fetchDevices } from './api'
 import { toProblem } from './errors'
+import type { FileSink } from './files'
 import type { ControlStatus, Device } from './types'
 
 /** Running inside the Conductor app rather than a browser. */
@@ -8,9 +9,9 @@ export const isApp = '__TAURI_INTERNALS__' in window
 /** The Windows app, which can read the tailnet and host this PC. */
 export const isDesktopApp = isApp && /Windows/.test(navigator.userAgent)
 
-async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+async function call<T>(cmd: string, args?: InvokeArgs, options?: InvokeOptions): Promise<T> {
   try {
-    return await invoke<T>(cmd, args)
+    return await invoke<T>(cmd, args, options)
   } catch (e) {
     throw toProblem(e, 'Something went wrong inside Conductor. Restart the app and try again.')
   }
@@ -76,5 +77,37 @@ export async function writeClipboard(text: string): Promise<boolean> {
     }
     document.removeEventListener('copy', onCopy)
     return copied
+  }
+}
+
+/**
+ * Somewhere to save a file from the other PC: straight into the Downloads
+ * folder in the app, or a download once it has all arrived in browsers.
+ */
+export async function saveFile(name: string): Promise<FileSink> {
+  if (isDesktopApp) {
+    const id = await call<number>('begin_save', { name })
+    return {
+      write: (data) => call('write_save', data, { headers: { 'save-id': String(id) } }),
+      finish: () => call('end_save', { id }),
+      abort: () => call('abort_save', { id }),
+    }
+  }
+  const parts: ArrayBuffer[] = []
+  return {
+    write: async (data) => void parts.push(data),
+    finish: async () => {
+      const url = URL.createObjectURL(new Blob(parts))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = name
+      document.body.append(link)
+      link.click()
+      link.remove()
+      // The download has its own copy long before then.
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      return name
+    },
+    abort: async () => void parts.splice(0),
   }
 }

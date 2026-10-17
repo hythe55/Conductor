@@ -1,11 +1,11 @@
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte'
-  import { Problem, toProblem } from '../lib/errors'
-  import { FILE_CHANNEL, SaveError, sendFile } from '../lib/files'
+  import { Problem } from '../lib/errors'
   import { attachDesktopInput } from '../lib/input'
   import { RemoteSession, type SessionState, type Stats } from '../lib/session'
   import { readClipboard, writeClipboard } from '../lib/platform'
   import { attachTouchInput } from '../lib/touch'
+  import { Transfers } from '../lib/transfers.svelte'
   import type { DisplayInfo, HostInfo } from '../lib/types'
   import Handle from '../components/Handle.svelte'
   import Keyboard from '../components/Keyboard.svelte'
@@ -42,91 +42,13 @@
 
   const coarse = window.matchMedia('(pointer: coarse)').matches
 
-  // Files go to the Downloads folder on the remote PC, one after another.
-  let queue: File[] = []
-  let sending = $state<{ files: number; current: number; total: number; done: number } | null>(null)
-  let stopSending: AbortController | null = null
-  // Folders dropped with the files, which can't be sent.
-  let skippedFolders = 0
-  // How the last batch ended, shown for a moment.
-  let finished = $state<string | null>(null)
-  let finishedTimer: number | undefined
-  let sendProblem = $state<{ chip: string; problem: Problem } | null>(null)
+  // Files go to the Downloads folder on the remote PC, and files copied there can be saved here.
+  const transfers = new Transfers(
+    (label) => session.openChannel(label),
+    () => info.name,
+  )
   let dragging = $state(false)
   let dragDepth = 0
-
-  const folderProblem = () => ({
-    chip: 'Folders weren’t sent',
-    problem: new Problem('To send a folder, zip it first or send the files in it.'),
-  })
-
-  function sendFiles(files: File[], folders = 0) {
-    clearTimeout(finishedTimer)
-    finished = null
-    sendProblem = null
-    skippedFolders += folders
-    if (!files.length) {
-      if (!sending && skippedFolders) {
-        sendProblem = folderProblem()
-        skippedFolders = 0
-      }
-      return
-    }
-    queue.push(...files)
-    const size = files.reduce((n, f) => n + f.size, 0)
-    if (sending) {
-      sending.files += files.length
-      sending.total += size
-    } else {
-      sending = { files: files.length, current: 1, total: size, done: 0 }
-      void sendQueue()
-    }
-  }
-
-  async function sendQueue() {
-    const stop = new AbortController()
-    stopSending = stop
-    // Bytes of the files already sent, and how many there were.
-    let before = 0
-    let count = 0
-    let file: File | undefined
-    try {
-      while ((file = queue.shift())) {
-        if (sending) sending.current = count + 1
-        const channel = session.openChannel(FILE_CHANNEL)
-        if (!channel) throw new Problem(`Couldn’t send ${file.name}. ${info.name} isn’t connected right now.`)
-        const start = before
-        await sendFile(channel, file, (bytes) => sending && (sending.done = start + bytes), stop.signal)
-        before += file.size
-        count++
-      }
-      if (skippedFolders) sendProblem = folderProblem()
-      else showFinished('Sent to Downloads')
-    } catch (e) {
-      const total = count + 1 + queue.length
-      queue = []
-      if (stop.signal.aborted) {
-        showFinished(total === 1 ? 'Stopped sending' : `Stopped after ${count} of ${total} files`)
-      } else if (file) {
-        sendProblem = {
-          chip: `Couldn’t send ${file.name}`,
-          problem:
-            e instanceof SaveError
-              ? new Problem(`Couldn’t save ${file.name} on ${info.name}. Try sending it again.`, e.message)
-              : toProblem(e, `Couldn’t send ${file.name} to ${info.name}. Try sending it again.`),
-        }
-      }
-    } finally {
-      sending = null
-      stopSending = null
-      skippedFolders = 0
-    }
-  }
-
-  function showFinished(text: string) {
-    finished = text
-    finishedTimer = window.setTimeout(() => (finished = null), 4000)
-  }
 
   // Files can be dropped while the remote screen is showing. The app stops
   // other drops from opening the file in place of Conductor.
@@ -160,17 +82,17 @@
       .filter((i) => i.kind === 'file' && !isFolder(i))
       .map((i) => i.getAsFile())
       .filter((f): f is File => !!f)
-    sendFiles(files, items.filter(isFolder).length)
+    transfers.send(files, items.filter(isFolder).length)
   }
 
   // A failed send has been dealt with once the menu that explains it closes.
   let explained = false
   $effect(() => {
     if (panelOpen) {
-      if (sendProblem) explained = true
+      if (transfers.failure) explained = true
     } else if (explained) {
       explained = false
-      sendProblem = null
+      transfers.failure = null
     }
   })
 
@@ -226,6 +148,8 @@
           void copyHere(msg.text)
         } else if (msg.t === 'cursor') {
           cursor = msg.name
+        } else if (msg.t === 'filesCopied') {
+          transfers.hostCopied(msg.offer, msg.files, msg.folders)
         }
       },
       onOpen() {
@@ -342,7 +266,10 @@
     void session.connect()
   }
 
-  onDestroy(() => session.close())
+  onDestroy(() => {
+    transfers.stop()
+    session.close()
+  })
 
   const quality = $derived(
     phase === 'reconnecting' ? 'bad' : stats && stats.rttMs != null && stats.rttMs > 80 ? 'poor' : 'good',
@@ -351,15 +278,7 @@
   // What the handle says, most important first.
   const notice = $derived.by(() => {
     if (hasVideo && error) return { chip: 'Can’t show this display', problem: error, warning: true }
-    if (sendProblem) return { ...sendProblem, warning: true }
-    if (sending) {
-      return {
-        chip: sending.files === 1 ? 'Sending file…' : `Sending file ${sending.current} of ${sending.files}…`,
-        progress: sending.total ? Math.floor((sending.done / sending.total) * 100) : 0,
-      }
-    }
-    if (finished) return { chip: finished }
-    return null
+    return transfers.notice
   })
 </script>
 
@@ -414,7 +333,7 @@
     multiple
     hidden
     onchange={() => {
-      sendFiles([...(picker.files ?? [])])
+      transfers.send([...(picker.files ?? [])])
       picker.value = ''
     }}
   />
@@ -459,7 +378,9 @@
       {quality}
       reconnecting={phase === 'reconnecting'}
       {notice}
-      sending={!!sending}
+      sending={!!transfers.sending}
+      saving={!!transfers.saving}
+      copiedFiles={transfers.copied?.files.length ?? 0}
       {displays}
       {activeDisplay}
       {fullscreen}
@@ -469,7 +390,9 @@
       ontogglestats={() => (showStats = !showStats)}
       onkeyboard={coarse ? () => keyboard.show() : undefined}
       onsendfiles={() => picker.click()}
-      onstopsending={() => stopSending?.abort()}
+      onstopsending={() => transfers.stopSending()}
+      onsavecopied={() => transfers.save()}
+      onstopsaving={() => transfers.stopSaving()}
       ondisconnect={disconnect}
     />
   {/if}

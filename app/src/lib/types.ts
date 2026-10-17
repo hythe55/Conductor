@@ -70,6 +70,13 @@ export type HostMsg =
   | { t: 'error'; message: string }
   | { t: 'clipboard'; text: string }
   | { t: 'cursor'; name: string }
+  /** Files copied on the host, fetched by `offer`. Empty when the clipboard no longer holds files. */
+  | { t: 'filesCopied'; offer: number; files: CopiedFile[]; folders: number }
+
+export interface CopiedFile {
+  name: string
+  size: number
+}
 
 /** The host's answer on a file channel. */
 export type FileReply = { t: 'saved'; name: string } | { t: 'failed'; message: string }

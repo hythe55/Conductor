@@ -208,6 +208,22 @@ pub enum HostMsg {
     /// The pointer changed shape. A CSS cursor value, `none` when it's hidden.
     #[serde(rename_all = "camelCase")]
     Cursor { name: String },
+    /// Files were just copied on this PC and can be fetched by `offer` on
+    /// [`COPIED_CHANNEL`]s. Empty when the clipboard no longer holds files.
+    #[serde(rename_all = "camelCase")]
+    FilesCopied {
+        offer: u32,
+        files: Vec<CopiedFile>,
+        /// Copied folders, which can't be fetched.
+        folders: u32,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopiedFile {
+    pub name: String,
+    pub size: u64,
 }
 
 /// Label of the data channels that carry files from the client, one file each.
@@ -220,6 +236,19 @@ pub struct FileHeader {
     /// The file's name on the client, without its folder.
     pub name: String,
     pub size: u64,
+}
+
+/// Label of the data channels that fetch files copied on the host, one file
+/// each. The client sends a [`FileRequest`]; the host answers with a
+/// [`FileHeader`] and the bytes, or a [`FileReply::Failed`].
+pub const COPIED_CHANNEL: &str = "copied";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileRequest {
+    pub offer: u32,
+    /// Position in the offer's file list.
+    pub index: u32,
 }
 
 /// The host's answer on a file channel, after which the client closes it.

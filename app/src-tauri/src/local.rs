@@ -16,7 +16,7 @@ pub struct Problem {
 }
 
 impl Problem {
-    fn new(message: &str, details: impl ToString) -> Self {
+    pub fn new(message: &str, details: impl ToString) -> Self {
         Self { message: message.into(), details: Some(details.to_string()) }
     }
 }

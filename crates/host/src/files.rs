@@ -1,20 +1,28 @@
-//! Files sent from the client, saved in the Downloads folder of whoever is
-//! signed in to this PC.
+//! Files moving between the client and this PC, each on a data channel of
+//! its own.
 //!
-//! Each file comes on a data channel of its own: a JSON [`FileHeader`], then
-//! the bytes as binary messages. Once the last byte is written the host
-//! answers with a [`FileReply`] and the client closes the channel. A file
-//! whose channel closes early is deleted.
+//! Files the client sends are saved in the Downloads folder of whoever is
+//! signed in to this PC. A JSON [`FileHeader`] comes first, then the bytes as
+//! binary messages. Once the last byte is written the host answers with a
+//! [`FileReply`] and the client closes the channel. A file whose channel
+//! closes early is deleted.
+//!
+//! Files copied on this PC are offered to the client, which fetches them one
+//! by one with a [`FileRequest`]. The host answers with a [`FileHeader`] and
+//! the bytes, or a [`FileReply::Failed`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::task::Poll;
 
 use anyhow::{Context, Result, bail};
 use conductor_proto::files::create_unique;
-use conductor_proto::{FileHeader, FileReply};
+use conductor_proto::{CopiedFile, FileHeader, FileReply, FileRequest, HostMsg};
+use str0m::Rtc;
 use str0m::channel::ChannelId;
+use tokio::sync::mpsc;
 use windows::Win32::Foundation::{CloseHandle, ERROR_PRIVILEGE_NOT_HELD, HANDLE};
 use windows::Win32::Security::{ImpersonateLoggedOnUser, RevertToSelf};
 use windows::Win32::System::Com::CoTaskMemFree;
@@ -102,7 +110,7 @@ fn step(transfer: &mut Transfer, binary: bool, data: &[u8]) -> Result<Option<Str
     match transfer {
         Transfer::Receiving { path, file, left: 0 } => {
             file.flush().with_context(|| format!("writing {}", path.display()))?;
-            Ok(Some(path.file_name().unwrap_or_default().to_string_lossy().into_owned()))
+            Ok(Some(file_name(path)))
         }
         _ => Ok(None),
     }
@@ -116,6 +124,205 @@ fn discard(transfer: Transfer) {
             tracing::warn!("couldn't delete the unfinished {}: {e}", path.display());
         }
     }
+}
+
+/// Copied files waiting to go out stop being read ahead while this much of
+/// them is queued on the connection. The connection holds more than this so
+/// control messages always fit.
+const QUEUED_MAX: usize = 1 << 20;
+const CHUNK: usize = 64 * 1024;
+/// How many copies stay fetchable, so a save that's under way can finish
+/// after something else is copied.
+const OFFERS_KEPT: usize = 8;
+/// Roughly how much of a control message the list of copied files may take.
+const OFFER_MAX_BYTES: usize = 128 * 1024;
+
+/// A message for a file channel: whether it's binary, and its bytes.
+type Message = (bool, Vec<u8>);
+
+enum Fetch {
+    /// Waiting for the client to say which file it wants.
+    Starting,
+    Reading(mpsc::Receiver<Message>),
+    /// Everything is queued; waiting for the client to close the channel.
+    Read,
+}
+
+/// Files copied on this PC, and the ones the client is fetching, by channel.
+#[derive(Default)]
+pub struct Outgoing {
+    offers: VecDeque<(u32, Vec<PathBuf>)>,
+    last_offer: u32,
+    /// Files are on this PC's clipboard and the client knows about them.
+    offering: bool,
+    fetches: HashMap<ChannelId, Fetch>,
+    /// There's room on the connection for more file data.
+    room: bool,
+}
+
+impl Outgoing {
+    /// Makes files just copied on this PC fetchable and returns the message
+    /// that tells the client about them.
+    pub fn offer(&mut self, paths: Vec<PathBuf>) -> HostMsg {
+        let (paths, files, folders) = describe(paths);
+        self.last_offer += 1;
+        let offer = self.last_offer;
+        self.offering = !files.is_empty();
+        if self.offering {
+            self.offers.push_back((offer, paths));
+            if self.offers.len() > OFFERS_KEPT {
+                self.offers.pop_front();
+            }
+        }
+        HostMsg::FilesCopied { offer, files, folders }
+    }
+
+    /// Something other than files was copied. Returns the message that tells
+    /// the client, if it thought files were there.
+    pub fn withdraw(&mut self) -> Option<HostMsg> {
+        if !std::mem::take(&mut self.offering) {
+            return None;
+        }
+        self.last_offer += 1;
+        Some(HostMsg::FilesCopied { offer: self.last_offer, files: vec![], folders: 0 })
+    }
+
+    pub fn open(&mut self, id: ChannelId) {
+        self.fetches.insert(id, Fetch::Starting);
+    }
+
+    pub fn has(&self, id: ChannelId) -> bool {
+        self.fetches.contains_key(&id)
+    }
+
+    /// Takes the client's request for a file. Returns the answer to send
+    /// when the file can't be had.
+    pub fn request(&mut self, id: ChannelId, data: &[u8]) -> Option<FileReply> {
+        let fetch = self.fetches.get_mut(&id)?;
+        if !matches!(fetch, Fetch::Starting) {
+            return None;
+        }
+        let path = serde_json::from_slice::<FileRequest>(data).ok().and_then(|r| {
+            let (_, paths) = self.offers.iter().find(|(offer, _)| *offer == r.offer)?;
+            paths.get(r.index as usize).cloned()
+        });
+        let Some(path) = path else {
+            *fetch = Fetch::Read;
+            return Some(FileReply::Failed { message: "it isn't copied on this PC anymore".into() });
+        };
+        let (tx, rx) = mpsc::channel(16);
+        std::thread::spawn(move || read(path, tx));
+        *fetch = Fetch::Reading(rx);
+        None
+    }
+
+    /// Everything read from this channel's file has been sent.
+    pub fn read(&mut self, id: ChannelId) {
+        if let Some(fetch) = self.fetches.get_mut(&id) {
+            *fetch = Fetch::Read;
+        }
+    }
+
+    /// The channel closed. Reading its file stops.
+    pub fn close(&mut self, id: ChannelId) {
+        self.fetches.remove(&id);
+    }
+
+    /// Checks how much file data is waiting on the connection. Call before
+    /// [`Self::next`], whenever the connection may have sent some.
+    pub fn measure(&mut self, rtc: &mut Rtc) {
+        let mut queued = 0;
+        for id in self.fetches.keys() {
+            if let Some(mut channel) = rtc.channel(*id) {
+                queued += channel.buffered_amount();
+            }
+        }
+        self.room = queued < QUEUED_MAX;
+    }
+
+    /// The next message for a file channel, while there's room for it. None
+    /// once the channel's file has all been read.
+    pub async fn next(&mut self) -> (ChannelId, Option<Message>) {
+        std::future::poll_fn(|cx| {
+            if !self.room {
+                return Poll::Pending;
+            }
+            for (id, fetch) in &mut self.fetches {
+                if let Fetch::Reading(rx) = fetch {
+                    if let Poll::Ready(message) = rx.poll_recv(cx) {
+                        return Poll::Ready((*id, message));
+                    }
+                }
+            }
+            Poll::Pending
+        })
+        .await
+    }
+}
+
+/// Splits what was copied into files the client can fetch and a count of
+/// folders, which it can't. Looks as the signed-in user, who copied them.
+fn describe(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<CopiedFile>, u32) {
+    let user = User::signed_in().ok();
+    let _as_user = user.as_ref().and_then(|u| u.impersonate().ok().flatten());
+    let (mut kept, mut files, mut folders, mut bytes) = (vec![], vec![], 0, 0);
+    for path in paths {
+        match std::fs::metadata(&path) {
+            Ok(m) if m.is_dir() => folders += 1,
+            Ok(m) => {
+                let name = file_name(&path);
+                bytes += name.len() + 32;
+                if bytes > OFFER_MAX_BYTES {
+                    tracing::info!("too many files copied; offering the first {}", files.len());
+                    break;
+                }
+                files.push(CopiedFile { name, size: m.len() });
+                kept.push(path);
+            }
+            Err(e) => tracing::debug!("can't offer {}: {e}", path.display()),
+        }
+    }
+    (kept, files, folders)
+}
+
+/// Reads a copied file as the signed-in user and hands it over in messages
+/// for its channel: a [`FileHeader`] and the bytes, or a [`FileReply::Failed`].
+fn read(path: PathBuf, tx: mpsc::Sender<Message>) {
+    let sent = || -> Result<bool> {
+        let user = User::signed_in()?;
+        let _as_user = user.impersonate()?;
+        let mut file = File::open(&path).with_context(|| format!("opening {}", path.display()))?;
+        let size = file.metadata().with_context(|| format!("reading {}", path.display()))?.len();
+        let header = serde_json::to_vec(&FileHeader { name: file_name(&path), size })?;
+        if tx.blocking_send((false, header)).is_err() {
+            return Ok(false);
+        }
+        let mut left = size;
+        while left > 0 {
+            let mut chunk = vec![0; left.min(CHUNK as u64) as usize];
+            file.read_exact(&mut chunk).with_context(|| format!("reading {}", path.display()))?;
+            left -= chunk.len() as u64;
+            // The client closed the channel.
+            if tx.blocking_send((true, chunk)).is_err() {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    };
+    match sent() {
+        Ok(true) => tracing::info!("sent {}", path.display()),
+        Ok(false) => tracing::info!("stopped sending {}", path.display()),
+        Err(e) => {
+            tracing::warn!("sending a copied file: {e:#}");
+            if let Ok(json) = serde_json::to_vec(&FileReply::Failed { message: format!("{e:#}") }) {
+                _ = tx.blocking_send((false, json));
+            }
+        }
+    }
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name().unwrap_or_default().to_string_lossy().into_owned()
 }
 
 /// Creates a new file in the Downloads folder, as the signed-in user so it's
