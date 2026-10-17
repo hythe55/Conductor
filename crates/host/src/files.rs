@@ -166,7 +166,7 @@ impl Outgoing {
     /// that tells the client about them.
     pub fn offer(&mut self, paths: Vec<PathBuf>) -> HostMsg {
         let (paths, files, folders) = describe(paths);
-        tracing::info!("{} files and {folders} folders copied", files.len());
+        tracing::info!("copied on this PC: files {}, folders {folders}", files.len());
         self.last_offer += 1;
         let offer = self.last_offer;
         self.offering = !files.is_empty();
