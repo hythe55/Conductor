@@ -41,6 +41,11 @@ pub struct Encoder {
     fps: u32,
 }
 
+// SAFETY: encoders are created and used only on threads in the multithreaded
+// apartment, where COM objects may be called from any thread, and one thread
+// uses an encoder at a time.
+unsafe impl Send for Encoder {}
+
 pub fn startup() -> Result<()> {
     unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL).context("MFStartup") }
 }
@@ -316,9 +321,19 @@ impl Encoder {
         Ok(frames)
     }
 
-    pub fn set_bitrate(&self, bitrate: u32) {
-        if let Some(c) = &self.codec {
-            unsafe { _ = c.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &variant_u32(bitrate)) };
+    /// Returns false if the encoder kept its old bitrate. Some (Intel's, for one)
+    /// only take a bitrate when they're created.
+    pub fn set_bitrate(&self, bitrate: u32) -> bool {
+        let Some(c) = &self.codec else { return false };
+        unsafe {
+            if c.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &variant_u32(bitrate)).is_err() {
+                return false;
+            }
+            // They accept the new value without complaint, so check what reads back.
+            match c.GetValue(&CODECAPI_AVEncCommonMeanBitRate).and_then(|v| u32::try_from(&v)) {
+                Ok(current) => current == bitrate,
+                Err(_) => true,
+            }
         }
     }
 

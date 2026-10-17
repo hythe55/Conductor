@@ -29,6 +29,9 @@ const MIN_BITRATE: u32 = 500_000;
 const MAX_BITRATE: u32 = 40_000_000;
 /// No ICE traffic for this long ends the session.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(15);
+/// How many due timeouts to handle in a row before checking the socket.
+const MAX_DUE_TIMEOUTS: u32 = 256;
+const STATS_EVERY: Duration = Duration::from_secs(5);
 
 pub struct Params {
     /// Name of the device asking to control this PC, for the on-screen banner.
@@ -81,6 +84,7 @@ struct Session {
     bitrate: u32,
     connected: bool,
     paused: bool,
+    stats: Stats,
 }
 
 async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
@@ -100,15 +104,34 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
         bitrate: START_BITRATE,
         connected: false,
         paused: false,
+        stats: Stats::new(),
     };
     let mut buf = vec![0u8; 2048];
     let mut last_rx = Instant::now();
 
     loop {
+        // str0m stamps outgoing packets with the time of the last input, and the
+        // congestion controller reads stale stamps as network delay. Keep it current.
+        s.rtc.handle_input(Input::Timeout(Instant::now()))?;
+        let mut due = 0;
         let timeout = loop {
             match s.rtc.poll_output()? {
-                Output::Timeout(t) => break t,
+                Output::Timeout(t) => {
+                    // The pacer releases one packet per timeout and asks for the next one
+                    // straight away. Going through the runtime's timer would cost a
+                    // millisecond or more each time and cap the stream at a few hundred
+                    // packets a second, so drive due timeouts here (bounded, so receiving
+                    // still gets a turn).
+                    let now = Instant::now();
+                    if t > now || due == MAX_DUE_TIMEOUTS {
+                        break t;
+                    }
+                    due += 1;
+                    s.rtc.handle_input(Input::Timeout(now))?;
+                }
                 Output::Transmit(t) => {
+                    s.stats.packets += 1;
+                    s.stats.sent += t.contents.len() as u64;
                     _ = socket.send_to(&t.contents, t.destination).await;
                 }
                 Output::Event(e) => {
@@ -118,6 +141,7 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
                 }
             }
         };
+        s.stats.report(s.bitrate);
         if last_rx.elapsed() > IDLE_TIMEOUT {
             anyhow::bail!("client stopped responding");
         }
@@ -139,9 +163,7 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
                 ))?;
             }
             Some(ev) = events_rx.recv() => s.handle_pipeline(ev)?,
-            _ = tokio::time::sleep_until(timeout.into()) => {
-                s.rtc.handle_input(Input::Timeout(Instant::now()))?;
-            }
+            _ = tokio::time::sleep_until(timeout.into()) => {}
         }
     }
 }
@@ -189,6 +211,7 @@ impl Session {
                 }
             }
             Event::EgressBitrateEstimate(BweKind::Twcc { estimate, .. }) => {
+                self.stats.estimate = estimate.as_u64();
                 let target = ((estimate.as_u64() as f64) * 0.85) as u32;
                 let target = target.clamp(MIN_BITRATE, MAX_BITRATE);
                 // Ignore jitter; re-tune only on meaningful changes.
@@ -279,6 +302,8 @@ impl Session {
                 let Some(w) = self.rtc.writer(*mid) else { return Ok(()) };
                 let rtp = MediaTime::new((f.time as u64) * 9 / 1000, Frequency::NINETY_KHZ);
                 let zero = MediaTime::new(0, Frequency::NINETY_KHZ);
+                self.stats.frames += 1;
+                self.stats.written += f.data.len() as u64;
                 w.playout_delay(zero, zero).write(pt, Instant::now(), rtp, f.data)?;
             }
             PipelineEvent::Started { display, width, height, encoder, origin, size } => {
@@ -298,6 +323,42 @@ impl Session {
             }
         }
         Ok(())
+    }
+}
+
+/// Counts what the session sent, logged every few seconds at debug level.
+struct Stats {
+    since: Instant,
+    frames: u32,
+    /// Encoded video handed to str0m.
+    written: u64,
+    packets: u32,
+    /// Everything str0m put on the wire.
+    sent: u64,
+    estimate: u64,
+}
+
+impl Stats {
+    fn new() -> Self {
+        Self { since: Instant::now(), frames: 0, written: 0, packets: 0, sent: 0, estimate: 0 }
+    }
+
+    fn report(&mut self, bitrate: u32) {
+        let elapsed = self.since.elapsed();
+        if elapsed < STATS_EVERY {
+            return;
+        }
+        let secs = elapsed.as_secs_f64();
+        tracing::debug!(
+            "session: {:.0} frames/s, {:.2} Mbps of video, {:.0} packets/s, {:.2} Mbps sent, estimate {:.2} Mbps, encoder target {:.2} Mbps",
+            self.frames as f64 / secs,
+            self.written as f64 * 8.0 / secs / 1e6,
+            self.packets as f64 / secs,
+            self.sent as f64 * 8.0 / secs / 1e6,
+            self.estimate as f64 / 1e6,
+            bitrate as f64 / 1e6,
+        );
+        *self = Self { estimate: self.estimate, ..Self::new() };
     }
 }
 
