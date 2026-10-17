@@ -197,11 +197,14 @@ fn create() -> anyhow::Result<HWND> {
             Some(instance.into()),
             None,
         )?;
-        if let Err(e) = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) {
+        // Windows 10 refuses to exclude a layered window from capture (with a
+        // misleading out-of-memory error) until its transparency is set.
+        let excluded = SetLayeredWindowAttributes(hwnd, COLORREF(0), OPACITY, LWA_ALPHA)
+            .and_then(|()| SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE));
+        if let Err(e) = excluded {
             _ = DestroyWindow(hwnd);
             return Err(anyhow::Error::from(e).context("excluding the banner from capture"));
         }
-        SetLayeredWindowAttributes(hwnd, COLORREF(0), OPACITY, LWA_ALPHA)?;
         Ok(hwnd)
     }
 }

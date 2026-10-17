@@ -198,12 +198,29 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("conductor-trust-{}", std::process::id()));
         assert_eq!(trusted(&dir), None);
         fs::create_dir(&dir).unwrap();
-        // Created by the user running the tests, not SYSTEM or administrators.
-        let owned_by_user = trusted(&dir);
+        // Owned by the user running the tests, or by administrators when that
+        // user is elevated (as on CI).
+        let created = trusted(&dir);
         fs::remove_dir(&dir).unwrap();
-        assert_eq!(owned_by_user, Some(false));
+        assert_eq!(created, Some(elevated()));
         assert_eq!(trusted(Path::new(r"C:\Windows\System32")), Some(false), "owned by TrustedInstaller");
         assert_eq!(trusted(Path::new(r"C:\ProgramData")), Some(true), "owned by SYSTEM");
+    }
+
+    fn elevated() -> bool {
+        use windows::Win32::Foundation::{CloseHandle, HANDLE};
+        use windows::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
+        use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        unsafe {
+            let mut token = HANDLE::default();
+            OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).unwrap();
+            let mut info = TOKEN_ELEVATION::default();
+            let mut len = 0;
+            let size = size_of::<TOKEN_ELEVATION>() as u32;
+            GetTokenInformation(token, TokenElevation, Some(&mut info as *mut _ as *mut _), size, &mut len).unwrap();
+            _ = CloseHandle(token);
+            info.TokenIsElevated != 0
+        }
     }
 
     #[test]
