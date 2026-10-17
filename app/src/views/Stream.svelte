@@ -21,6 +21,7 @@
   // The view is created per connection, so the initial props are all it needs.
   const start = untrack(() => ({
     url,
+    name: info.name,
     displays: info.displays,
     display: info.displays.find((d) => d.primary)?.id ?? info.displays[0]?.id ?? '',
   }))
@@ -39,6 +40,9 @@
   const SOUND_KEY = 'conductor.sound'
   let sound = $state(savedSound())
   let soundLater: AbortController | undefined
+  // Covering the remote PC's screen is remembered for each PC.
+  const HIDE_KEY = `conductor.hideScreen.${start.name}`
+  let hideScreen = $state(savedHideScreen())
   let route = $state<Route | null>(null)
   // Said on the handle once the connection has been relayed for a while. Tailscale
   // often starts relayed and finds a direct path within seconds.
@@ -170,6 +174,7 @@
       },
       onOpen() {
         session.send({ t: 'setAudio', enabled: sound })
+        session.send({ t: 'hideScreen', hide: hideScreen })
         void syncClipboard()
       },
     },
@@ -268,6 +273,25 @@
     session.send({ t: 'setAudio', enabled: sound })
     if (sound) playSound()
     else soundLater?.abort()
+  }
+
+  function savedHideScreen() {
+    try {
+      return localStorage.getItem(HIDE_KEY) === 'on'
+    } catch {
+      return false
+    }
+  }
+
+  function toggleHideScreen() {
+    hideScreen = !hideScreen
+    try {
+      if (hideScreen) localStorage.setItem(HIDE_KEY, 'on')
+      else localStorage.removeItem(HIDE_KEY)
+    } catch {
+      // Not remembered; it still changed.
+    }
+    session.send({ t: 'hideScreen', hide: hideScreen })
   }
 
   // A browser may not play sound until the page is used, so then it starts on the next tap, click or key.
@@ -467,10 +491,13 @@
       {fullscreen}
       {showStats}
       {sound}
+      pc={info.name}
+      {hideScreen}
       onselectdisplay={selectDisplay}
       ontogglefullscreen={toggleFullscreen}
       ontogglestats={() => (showStats = !showStats)}
       ontogglesound={toggleSound}
+      ontogglehidescreen={toggleHideScreen}
       onkeyboard={coarse ? () => keyboard.show() : undefined}
       onsendfiles={() => picker.click()}
       onstopsending={() => transfers.stopSending()}

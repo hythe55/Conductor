@@ -115,6 +115,8 @@ struct Session {
     display: Option<String>,
     controller: String,
     banner: Option<Banner>,
+    /// Cover this PC's displays while the session lasts.
+    hide_screen: bool,
     max_size: (u32, u32),
     bitrate: u32,
     connected: bool,
@@ -169,6 +171,7 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params, mut route_rx: mpsc::Re
         display: params.display,
         controller: params.controller,
         banner: None,
+        hide_screen: false,
         max_size: params.max_size,
         bitrate: START_BITRATE,
         connected: false,
@@ -289,7 +292,9 @@ impl Session {
             Event::Connected => {
                 self.connected = true;
                 tracing::info!("{} connected", self.controller);
-                self.banner = Some(Banner::new(self.controller.clone()));
+                let banner = Banner::new(self.controller.clone());
+                banner.hide_screen(self.hide_screen);
+                self.banner = Some(banner);
                 self.start_pipeline();
                 self.start_sound();
             }
@@ -438,6 +443,12 @@ impl Session {
                     self.pipeline = None;
                 } else {
                     self.start_pipeline();
+                }
+            }
+            ClientMsg::HideScreen { hide } => {
+                self.hide_screen = hide;
+                if let Some(b) = &self.banner {
+                    b.hide_screen(hide);
                 }
             }
             ClientMsg::SetAudio { enabled } => {

@@ -7,6 +7,7 @@ Control your Windows PCs from your other devices, over your own [Tailscale](http
 - Hardware video encoding with low latency, and adapts to the connection
 - Sound from the PC you're controlling
 - Copy and paste text between PCs, and send or save files
+- Shows who's in control on the PC's screen, or covers the screen so nobody at the PC sees what you're doing
 - Sends nothing while nobody is watching, and nothing for sound while it's quiet
 - Updates itself from GitHub releases when nobody is using it
 - Control from the Windows app, the Android app, or any browser on your tailnet

@@ -191,6 +191,10 @@ pub enum ClientMsg {
     /// Send the sound playing on this PC, or stop. Off until asked.
     #[serde(rename_all = "camelCase")]
     SetAudio { enabled: bool },
+    /// Cover this PC's displays, so nobody in front of it sees what the
+    /// session does, or stop. Ends with the session.
+    #[serde(rename_all = "camelCase")]
+    HideScreen { hide: bool },
 }
 
 /// Host to client, over the `control` data channel.

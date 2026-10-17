@@ -63,6 +63,8 @@ export type ClientMsg =
   | { t: 'setPaused'; paused: boolean }
   | { t: 'clipboard'; text: string }
   | { t: 'setAudio'; enabled: boolean }
+  /** Cover the remote PC's displays so nobody there sees the session. Ends with it. */
+  | { t: 'hideScreen'; hide: boolean }
 
 export type HostMsg =
   | { t: 'hello'; host: HostInfo; display: string }

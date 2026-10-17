@@ -1,9 +1,12 @@
-//! A small banner at the top of a display while another device controls it.
+//! A small banner at the top of a display while another device controls it,
+//! or a cover over every display while a session hides the screen.
 //!
-//! The banner is excluded from screen capture, so the controlling device never
-//! sees it, and it ignores the mouse, so clicks pass through to whatever is
-//! underneath. It lives on its own thread with a message loop, on the desktop
-//! the process started on (the user's normal desktop).
+//! Both are excluded from screen capture, so the controlling device never
+//! sees them, and they ignore the mouse, so clicks pass through to whatever is
+//! underneath. They live on their own thread with a message loop, on the
+//! desktop the process started on (the user's normal desktop). Windows keeps
+//! some things above any app's window, such as the Start menu, so the cover
+//! hides most of the screen rather than all of it.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -24,8 +27,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, GetWindowTextW, HTTRANSPARENT, HWND_TOPMOST, LWA_ALPHA, MA_NOACTIVATE, MSG, PM_NOREMOVE,
     PeekMessageW, PostThreadMessageW, RegisterClassW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetLayeredWindowAttributes,
     SetWindowDisplayAffinity, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, TranslateMessage,
-    WDA_EXCLUDEFROMCAPTURE, WM_APP, WM_MOUSEACTIVATE, WM_NCHITTEST, WM_PAINT, WNDCLASSW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    WDA_EXCLUDEFROMCAPTURE, WM_APP, WM_DISPLAYCHANGE, WM_MOUSEACTIVATE, WM_NCHITTEST, WM_PAINT, WNDCLASSW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
@@ -36,8 +39,13 @@ const CLASS: PCWSTR = w!("ConductorBanner");
 const BACKGROUND: COLORREF = COLORREF(0x0026_2626);
 const TEXT: COLORREF = COLORREF(0x00F2_F2F2);
 const OPACITY: u8 = 235;
+const COVER_BACKGROUND: COLORREF = COLORREF(0);
+const COVER_TEXT: COLORREF = COLORREF(0x00A3_A3A3);
 /// Sizes at 100% scaling.
 const FONT_PX: i32 = 13;
+const COVER_FONT_PX: i32 = 18;
+/// Set in a window's user data, next to its DPI, when it's a cover.
+const COVER_FLAG: isize = 1 << 16;
 const HEIGHT_PX: i32 = 28;
 const PADDING_PX: i32 = 14;
 const RADIUS_PX: i32 = 8;
@@ -55,6 +63,8 @@ struct Entry {
     id: u64,
     controller: String,
     area: Option<Area>,
+    /// The session hides the screen.
+    private: bool,
 }
 
 static ENTRIES: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
@@ -77,7 +87,7 @@ impl Banner {
                 .ok();
         });
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        ENTRIES.lock().unwrap().push(Entry { id, controller, area: None });
+        ENTRIES.lock().unwrap().push(Entry { id, controller, area: None, private: false });
         Self { id }
     }
 
@@ -85,6 +95,14 @@ impl Banner {
     pub fn set_area(&self, area: Area) {
         if let Some(e) = ENTRIES.lock().unwrap().iter_mut().find(|e| e.id == self.id) {
             e.area = Some(area);
+        }
+        refresh();
+    }
+
+    /// Covers every display so nobody at this PC sees what the session does.
+    pub fn hide_screen(&self, hide: bool) {
+        if let Some(e) = ENTRIES.lock().unwrap().iter_mut().find(|e| e.id == self.id) {
+            e.private = hide;
         }
         refresh();
     }
@@ -131,19 +149,55 @@ fn run() {
     }
 }
 
-/// Makes the banner windows match the active sessions: one per controlled display.
-fn reconcile(windows: &mut HashMap<Area, HWND>, supported: &mut bool) {
-    let mut wanted: HashMap<Area, Vec<String>> = HashMap::new();
-    for e in ENTRIES.lock().unwrap().iter() {
-        if let Some(area) = e.area {
-            let names = wanted.entry(area).or_default();
-            if !names.contains(&e.controller) {
-                names.push(e.controller.clone());
+/// The windows the sessions call for, by display and whether it's a cover,
+/// with who's controlling: a banner on each controlled display, or a cover
+/// on every display while any session hides the screen.
+fn wanted() -> HashMap<(Area, bool), Vec<String>> {
+    let (private, entries) = {
+        let entries = ENTRIES.lock().unwrap();
+        let private = entries.iter().any(|e| e.private);
+        (private, entries.iter().map(|e| (e.area, e.controller.clone())).collect::<Vec<_>>())
+    };
+    let mut wanted: HashMap<(Area, bool), Vec<String>> = HashMap::new();
+    if private {
+        let mut names: Vec<String> = Vec::new();
+        for (_, name) in &entries {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        let mut areas: Vec<Area> = match crate::capture::displays() {
+            Ok(displays) => displays.iter().map(|d| Area { x: d.x, y: d.y, width: d.width, height: d.height }).collect(),
+            Err(e) => {
+                tracing::warn!("cover: couldn't list displays: {e:#}");
+                Vec::new()
+            }
+        };
+        // At least cover the displays being controlled.
+        if areas.is_empty() {
+            areas = entries.iter().filter_map(|(area, _)| *area).collect();
+        }
+        for area in areas {
+            wanted.insert((area, true), names.clone());
+        }
+    } else {
+        for (area, name) in entries {
+            if let Some(area) = area {
+                let names = wanted.entry((area, false)).or_default();
+                if !names.contains(&name) {
+                    names.push(name);
+                }
             }
         }
     }
-    windows.retain(|area, hwnd| {
-        let keep = wanted.contains_key(area);
+    wanted
+}
+
+/// Makes the windows match the active sessions.
+fn reconcile(windows: &mut HashMap<(Area, bool), HWND>, supported: &mut bool) {
+    let wanted = wanted();
+    windows.retain(|key, hwnd| {
+        let keep = wanted.contains_key(key);
         if !keep {
             _ = unsafe { DestroyWindow(*hwnd) };
         }
@@ -152,11 +206,11 @@ fn reconcile(windows: &mut HashMap<Area, HWND>, supported: &mut bool) {
     if !*supported {
         return;
     }
-    for (area, names) in wanted {
-        let hwnd = match windows.get(&area) {
+    for ((area, cover), names) in wanted {
+        let hwnd = match windows.get(&(area, cover)) {
             Some(hwnd) => *hwnd,
-            None => match create() {
-                Ok(hwnd) => *windows.entry(area).or_insert(hwnd),
+            None => match create(cover) {
+                Ok(hwnd) => *windows.entry((area, cover)).or_insert(hwnd),
                 Err(e) => {
                     // Older Windows can't hide a window from capture. Showing it
                     // would put it on the controlling device's screen, so don't.
@@ -166,9 +220,9 @@ fn reconcile(windows: &mut HashMap<Area, HWND>, supported: &mut bool) {
                 }
             },
         };
-        let text = label(&names);
-        tracing::debug!("banner on {area:?}: {text}");
-        place(hwnd, area, &text);
+        let text = if cover { format!("{}. This screen is hidden.", label(&names)) } else { label(&names) };
+        tracing::debug!("{} on {area:?}: {text}", if cover { "cover" } else { "banner" });
+        place(hwnd, area, &text, cover);
     }
 }
 
@@ -180,7 +234,7 @@ fn label(names: &[String]) -> String {
     }
 }
 
-fn create() -> anyhow::Result<HWND> {
+fn create(cover: bool) -> anyhow::Result<HWND> {
     unsafe {
         let instance = GetModuleHandleW(None)?;
         let hwnd = CreateWindowExW(
@@ -199,7 +253,8 @@ fn create() -> anyhow::Result<HWND> {
         )?;
         // Windows 10 refuses to exclude a layered window from capture (with a
         // misleading out-of-memory error) until its transparency is set.
-        let excluded = SetLayeredWindowAttributes(hwnd, COLORREF(0), OPACITY, LWA_ALPHA)
+        let opacity = if cover { 255 } else { OPACITY };
+        let excluded = SetLayeredWindowAttributes(hwnd, COLORREF(0), opacity, LWA_ALPHA)
             .and_then(|()| SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE));
         if let Err(e) = excluded {
             _ = DestroyWindow(hwnd);
@@ -209,7 +264,7 @@ fn create() -> anyhow::Result<HWND> {
     }
 }
 
-fn place(hwnd: HWND, area: Area, text: &str) {
+fn place(hwnd: HWND, area: Area, text: &str, cover: bool) {
     unsafe {
         let rect = RECT {
             left: area.x,
@@ -222,12 +277,20 @@ fn place(hwnd: HWND, area: Area, text: &str) {
         _ = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi, &mut _dpi_y);
         let dpi = dpi as i32;
         let scale = |px: i32| px * dpi / 96;
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, dpi as isize);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, dpi as isize | if cover { COVER_FLAG } else { 0 });
 
         let wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
         _ = SetWindowTextW(hwnd, PCWSTR(wide.as_ptr()));
 
-        let font = font(dpi);
+        if cover {
+            SetWindowRgn(hwnd, None, false);
+            let (w, h) = (area.width as i32, area.height as i32);
+            _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), area.x, area.y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            _ = InvalidateRect(Some(hwnd), None, true);
+            return;
+        }
+
+        let font = font(dpi, FONT_PX);
         let hdc = GetDC(Some(hwnd));
         let old = SelectObject(hdc, font.into());
         let mut size = Default::default();
@@ -248,10 +311,10 @@ fn place(hwnd: HWND, area: Area, text: &str) {
     }
 }
 
-fn font(dpi: i32) -> HFONT {
+fn font(dpi: i32, px: i32) -> HFONT {
     unsafe {
         CreateFontW(
-            -(FONT_PX * dpi / 96),
+            -(px * dpi / 96),
             0,
             0,
             0,
@@ -278,6 +341,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         // Never take clicks or focus from the person using this PC.
         WM_NCHITTEST => LRESULT(HTTRANSPARENT as isize),
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        // Covers follow the displays as they're added, removed or resized.
+        WM_DISPLAYCHANGE => {
+            refresh();
+            LRESULT(0)
+        }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
@@ -288,17 +356,19 @@ unsafe fn paint(hwnd: HWND) {
         let hdc = BeginPaint(hwnd, &mut ps);
         let mut rect = RECT::default();
         _ = GetClientRect(hwnd, &mut rect);
-        let brush = CreateSolidBrush(BACKGROUND);
+        let data = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+        let cover = data & COVER_FLAG != 0;
+        let brush = CreateSolidBrush(if cover { COVER_BACKGROUND } else { BACKGROUND });
         FillRect(hdc, &rect, brush);
         _ = DeleteObject(brush.into());
 
         let mut text = [0u16; 256];
         let len = GetWindowTextW(hwnd, &mut text) as usize;
-        let dpi = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as i32;
-        let font = font(if dpi > 0 { dpi } else { 96 });
+        let dpi = (data & 0xFFFF) as i32;
+        let font = font(if dpi > 0 { dpi } else { 96 }, if cover { COVER_FONT_PX } else { FONT_PX });
         let old = SelectObject(hdc, font.into());
         SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, TEXT);
+        SetTextColor(hdc, if cover { COVER_TEXT } else { TEXT });
         DrawTextW(hdc, &mut text[..len], &mut rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         SelectObject(hdc, old);
         _ = DeleteObject(font.into());

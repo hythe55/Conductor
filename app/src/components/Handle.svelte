@@ -30,10 +30,14 @@
     fullscreen: boolean
     showStats: boolean
     sound: boolean
+    /** The remote PC's name. */
+    pc: string
+    hideScreen: boolean
     onselectdisplay: (id: string) => void
     ontogglefullscreen: () => void
     ontogglestats: () => void
     ontogglesound: () => void
+    ontogglehidescreen: () => void
     /** Opens the on-screen keyboard. Only given where there's no real one. */
     onkeyboard?: () => void
     onsendfiles: () => void
@@ -56,10 +60,13 @@
     fullscreen,
     showStats,
     sound,
+    pc,
+    hideScreen,
     onselectdisplay,
     ontogglefullscreen,
     ontogglestats,
     ontogglesound,
+    ontogglehidescreen,
     onkeyboard,
     onsendfiles,
     onstopsending,
@@ -341,6 +348,16 @@
         >
           <span class="check">{#if sound}<Icon name="check" />{/if}</span>
           <span class="text">Play sound</span>
+        </button>
+        <button
+          class="item"
+          role="menuitemcheckbox"
+          aria-checked={hideScreen}
+          tabindex="-1"
+          onclick={() => run(ontogglehidescreen)}
+        >
+          <span class="check">{#if hideScreen}<Icon name="check" />{/if}</span>
+          <span class="text">Hide screen on {pc}</span>
         </button>
         <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ontogglestats)}>
           <span class="check"></span>
