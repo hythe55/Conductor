@@ -557,7 +557,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-app"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "conductor-proto",
  "conductor-tailnet",
@@ -571,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-host"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -591,7 +591,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-proto"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -599,7 +599,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-tailnet"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "conductor-proto",
