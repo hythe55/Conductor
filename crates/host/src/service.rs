@@ -38,6 +38,9 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 const RECONCILE_EVERY: Duration = Duration::from_secs(2);
 const FIRST_UPDATE_CHECK: Duration = Duration::from_secs(60);
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+/// When a check fails, often because the network isn't back yet after the PC
+/// woke up, it's tried again sooner.
+const UPDATE_CHECK_RETRY: Duration = Duration::from_secs(10 * 60);
 /// How often a downloaded update looks for a moment when nobody is using Conductor.
 const INSTALL_RETRY: Duration = Duration::from_secs(5 * 60);
 
@@ -246,7 +249,7 @@ async fn keep_updated(sup: Arc<Mutex<Supervisor>>, mut requests: mpsc::Receiver<
             }
             sup.lock().await.update = UpdateStatus::Checking;
             let result = tokio::task::spawn_blocking(update::fetch).await.unwrap_or_else(|e| Err(e.into()));
-            next_check = Instant::now() + UPDATE_CHECK_EVERY;
+            next_check = Instant::now() + if result.is_ok() { UPDATE_CHECK_EVERY } else { UPDATE_CHECK_RETRY };
             let status = match result {
                 Ok(Some(u)) => {
                     let status = UpdateStatus::Ready { version: u.version.clone() };
