@@ -55,8 +55,12 @@ impl AppState {
     }
 
     async fn status(&self) -> Status {
+        self.status_within(STATUS_TTL).await
+    }
+
+    async fn status_within(&self, max_age: Duration) -> Status {
         let mut cached = self.status.lock().await;
-        if cached.1.elapsed() > STATUS_TTL {
+        if cached.1.elapsed() > max_age {
             match conductor_tailnet::status().await {
                 Ok(s) if s.is_running() => {
                     *self.own_hosts.write().unwrap() = own_hosts(&s);
@@ -84,9 +88,13 @@ impl AppState {
         devices.into_iter().map(|d| Device { is_you: requester_ips(&d), ..d }).collect()
     }
 
-    /// True for page origins served by one of the owner's machines.
     /// Whether `host` (lowercase, no port) names one of the owner's devices.
-    pub fn is_own_device(&self, host: &str) -> bool {
+    /// A miss refreshes the device list, in case the device was just added.
+    pub async fn is_own_device(&self, host: &str) -> bool {
+        if self.own_hosts.read().unwrap().contains(host) {
+            return true;
+        }
+        self.status_within(Duration::from_secs(5)).await;
         self.own_hosts.read().unwrap().contains(host)
     }
 }

@@ -22,9 +22,9 @@ const APP_ORIGINS: &[&str] =
 
 pub fn router(state: Arc<AppState>) -> Router {
     let index = state.web_dir.join("index.html");
-    let origins = state.clone();
+    // `gate` runs first and has already refused origins that aren't allowed.
     let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::predicate(move |origin: &HeaderValue, _| origin_allowed(&origins, origin)))
+        .allow_origin(AllowOrigin::mirror_request())
         .allow_methods([Method::GET, Method::POST])
         .allow_headers([header::CONTENT_TYPE]);
     Router::new()
@@ -51,7 +51,7 @@ async fn gate(
         return (StatusCode::MISDIRECTED_REQUEST, "unknown host").into_response();
     }
     if let Some(origin) = req.headers().get(header::ORIGIN) {
-        if !origin_allowed(&state, origin) {
+        if !origin_allowed(&state, origin).await {
             return (StatusCode::FORBIDDEN, "Requests from this website aren't allowed.").into_response();
         }
     }
@@ -89,7 +89,7 @@ fn host_allowed(state: &AppState, host: &str) -> bool {
 /// client served by any of the owner's machines. Everything else (including
 /// websites open on a tailnet device, or other people's shared machines) is
 /// refused.
-fn origin_allowed(state: &AppState, origin: &HeaderValue) -> bool {
+async fn origin_allowed(state: &AppState, origin: &HeaderValue) -> bool {
     let Ok(origin) = origin.to_str() else { return false };
     if APP_ORIGINS.contains(&origin) {
         return true;
@@ -102,7 +102,7 @@ fn origin_allowed(state: &AppState, origin: &HeaderValue) -> bool {
         // Pages served on this PC, such as the web client opened locally.
         return true;
     }
-    state.is_own_device(&host)
+    state.is_own_device(&host).await
 }
 
 async fn info(State(state): State<Arc<AppState>>) -> Json<HostInfo> {
