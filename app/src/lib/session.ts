@@ -18,6 +18,8 @@ export interface Stats {
 export interface SessionHandlers {
   onState(state: SessionState, problem?: Problem): void
   onStream(stream: MediaStream): void
+  /** Sound from the host, in a stream of its own so the picture isn't held back to match it. */
+  onAudio?(stream: MediaStream): void
   onMessage(msg: HostMsg): void
   /** The control channel is open and messages can be sent. */
   onOpen?(): void
@@ -88,7 +90,9 @@ export class RemoteSession {
       // Lowest latency: render frames as soon as they decode.
       if ('jitterBufferTarget' in r) r.jitterBufferTarget = 0
       if ('playoutDelayHint' in r) r.playoutDelayHint = 0
-      if (e.track.kind === 'video') this.handlers.onStream(e.streams[0] ?? new MediaStream([e.track]))
+      const stream = e.streams[0] ?? new MediaStream([e.track])
+      if (e.track.kind === 'video') this.handlers.onStream(stream)
+      else if (e.track.kind === 'audio') this.handlers.onAudio?.(stream)
     }
 
     pc.onconnectionstatechange = () => {

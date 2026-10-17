@@ -188,6 +188,9 @@ pub enum ClientMsg {
     /// Text copied on the client, to put on this PC's clipboard.
     #[serde(rename_all = "camelCase")]
     Clipboard { text: String },
+    /// Send the sound playing on this PC, or stop. Off until asked.
+    #[serde(rename_all = "camelCase")]
+    SetAudio { enabled: bool },
 }
 
 /// Host to client, over the `control` data channel.

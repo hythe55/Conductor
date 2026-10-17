@@ -34,6 +34,11 @@
   let showStats = $state(false)
   let stats = $state<Stats | null>(null)
   let fullscreen = $state(false)
+  let speaker: HTMLAudioElement
+  // Sound from the remote PC plays unless turned off, which is remembered.
+  const SOUND_KEY = 'conductor.sound'
+  let sound = $state(savedSound())
+  let soundLater: AbortController | undefined
   let keyboardOpen = $state(false)
   // The remote pointer's shape, shown in place of this device's pointer.
   let cursor = $state('default')
@@ -135,6 +140,10 @@
         video.srcObject = stream
         video.play().catch(() => {})
       },
+      onAudio(stream) {
+        speaker.srcObject = stream
+        if (sound) playSound()
+      },
       onMessage(msg) {
         if (msg.t === 'displays') {
           // The picture is back, so whatever went wrong with it is over.
@@ -153,6 +162,7 @@
         }
       },
       onOpen() {
+        session.send({ t: 'setAudio', enabled: sound })
         void syncClipboard()
       },
     },
@@ -233,6 +243,44 @@
     return () => clearInterval(timer)
   })
 
+  function savedSound() {
+    try {
+      return localStorage.getItem(SOUND_KEY) !== 'off'
+    } catch {
+      return true
+    }
+  }
+
+  function toggleSound() {
+    sound = !sound
+    try {
+      localStorage.setItem(SOUND_KEY, sound ? 'on' : 'off')
+    } catch {
+      // Not remembered; it still changed.
+    }
+    session.send({ t: 'setAudio', enabled: sound })
+    if (sound) playSound()
+    else soundLater?.abort()
+  }
+
+  // A browser may not play sound until the page is used, so then it starts on the next tap, click or key.
+  function playSound() {
+    soundLater?.abort()
+    // Until the sound arrives; then this runs again.
+    if (!speaker.srcObject) return
+    speaker.play().catch(() => {
+      const later = new AbortController()
+      soundLater = later
+      const retry = () => {
+        later.abort()
+        if (sound) playSound()
+      }
+      // A touch counts as using the page when it ends.
+      window.addEventListener('pointerup', retry, { capture: true, signal: later.signal })
+      window.addEventListener('keydown', retry, { capture: true, signal: later.signal })
+    })
+  }
+
   function selectDisplay(id: string) {
     if (id === activeDisplay) return
     activeDisplay = id
@@ -267,6 +315,7 @@
   }
 
   onDestroy(() => {
+    soundLater?.abort()
     transfers.stop()
     session.close()
   })
@@ -312,6 +361,8 @@
       onloadeddata={() => (hasVideo = true)}
     ></video>
   </div>
+
+  <audio bind:this={speaker} muted={!sound}></audio>
 
   <div class="pointer" bind:this={pointer} hidden aria-hidden="true">
     <svg width="20" height="20" viewBox="0 0 20 20">
@@ -385,9 +436,11 @@
       {activeDisplay}
       {fullscreen}
       {showStats}
+      {sound}
       onselectdisplay={selectDisplay}
       ontogglefullscreen={toggleFullscreen}
       ontogglestats={() => (showStats = !showStats)}
+      ontogglesound={toggleSound}
       onkeyboard={coarse ? () => keyboard.show() : undefined}
       onsendfiles={() => picker.click()}
       onstopsending={() => transfers.stopSending()}

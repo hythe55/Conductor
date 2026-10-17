@@ -62,6 +62,7 @@ export type ClientMsg =
   | { t: 'requestKeyframe' }
   | { t: 'setPaused'; paused: boolean }
   | { t: 'clipboard'; text: string }
+  | { t: 'setAudio'; enabled: boolean }
 
 export type HostMsg =
   | { t: 'hello'; host: HostInfo; display: string }

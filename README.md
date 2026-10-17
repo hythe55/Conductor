@@ -5,7 +5,10 @@ Control your Windows PCs from your other devices, over your own [Tailscale](http
 - Full keyboard and mouse control, on every display
 - Works at the sign-in screen, the lock screen, and on UAC prompts
 - Hardware video encoding with low latency, and adapts to the connection
-- Sends nothing while nobody is watching
+- Sound from the PC you're controlling
+- Copy and paste text between PCs, and send or save files
+- Sends nothing while nobody is watching, and nothing for sound while it's quiet
+- Updates itself from GitHub releases when nobody is using it
 - Control from the Windows app, the Android app, or any browser on your tailnet
 
 Conductor is under active development. Some features listed in the [roadmap](#roadmap) aren't built yet.
@@ -38,13 +41,13 @@ Every PC running Conductor also serves the web client on your tailnet. Open `htt
 Each PC runs two pieces:
 
 - `conductor-host service` runs as a Windows service. It keeps the agent running in whichever session is on the screen and answers the local app.
-- `conductor-host agent` captures the screen with the Desktop Duplication API, encodes it with the GPU's H.264 encoder, and streams it over WebRTC. It only does this while someone is connected, and only sends frames when the screen changes.
+- `conductor-host agent` captures the screen with the Desktop Duplication API, encodes it with the GPU's H.264 encoder, and streams it over WebRTC, with the sound playing on the PC encoded as Opus. It only does this while someone is connected, and only sends frames when the screen changes and sound while something plays.
 
 The Windows and Android apps are built with [Tauri](https://tauri.app). Their interface is the same web client every PC serves.
 
 ## Build from source
 
-You need Rust (stable), Node.js 20 or newer, and the Visual Studio C++ build tools.
+You need Rust (stable), Node.js 20 or newer, the Visual Studio C++ build tools, and CMake to build Opus. The build tools come with a CMake: if `cmake` isn't on your PATH, set `CMAKE` to `C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe`.
 
 ```
 cd app
@@ -58,11 +61,9 @@ The installer ends up in `target/release/bundle/nsis/`. To run the host without 
 
 - Android app with touch controls
 - Virtual displays, sized to the device you're controlling from
-- Clipboard sync and file transfer
-- Audio, even when the PC's speakers are muted
+- Sound even when the PC's own speakers are muted
 - Wake-on-LAN, shown only after a test wake succeeds
 - Power actions and scheduled sleep, shutdown and restart
-- Automatic updates
 
 ## License
 

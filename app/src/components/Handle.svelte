@@ -29,9 +29,11 @@
     activeDisplay: string
     fullscreen: boolean
     showStats: boolean
+    sound: boolean
     onselectdisplay: (id: string) => void
     ontogglefullscreen: () => void
     ontogglestats: () => void
+    ontogglesound: () => void
     /** Opens the on-screen keyboard. Only given where there's no real one. */
     onkeyboard?: () => void
     onsendfiles: () => void
@@ -53,9 +55,11 @@
     activeDisplay,
     fullscreen,
     showStats,
+    sound,
     onselectdisplay,
     ontogglefullscreen,
     ontogglestats,
+    ontogglesound,
     onkeyboard,
     onsendfiles,
     onstopsending,
@@ -269,7 +273,6 @@
     bind:this={panel}
     bind:offsetWidth={panelWidth}
     class="panel"
-    class:checks={displays.length > 1}
     style:left="{panelLeft}px"
     onkeydown={onPanelKey}
   >
@@ -329,6 +332,16 @@
             {#if !coarse}<kbd>Ctrl+Alt+Shift+F</kbd>{/if}
           </button>
         {/if}
+        <button
+          class="item"
+          role="menuitemcheckbox"
+          aria-checked={sound}
+          tabindex="-1"
+          onclick={() => run(ontogglesound)}
+        >
+          <span class="check">{#if sound}<Icon name="check" />{/if}</span>
+          <span class="text">Play sound</span>
+        </button>
         <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ontogglestats)}>
           <span class="check"></span>
           <span class="text">{showStats ? 'Hide connection details' : 'Show connection details'}</span>
@@ -453,7 +466,7 @@
 
   .item {
     display: grid;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: 16px 1fr auto;
     align-items: center;
     gap: var(--space-2);
     width: 100%;
@@ -474,14 +487,6 @@
 
   .item:focus-visible {
     outline-offset: -2px;
-  }
-
-  .panel.checks .item {
-    grid-template-columns: 16px 1fr auto;
-  }
-
-  .panel:not(.checks) .check {
-    display: none;
   }
 
   .check {

@@ -11,7 +11,7 @@ use conductor_proto::{COPIED_CHANNEL, ClientMsg, FILE_CHANNEL, FileReply, HostMs
 use str0m::bwe::{Bitrate, BweKind};
 use str0m::change::SdpOffer;
 use str0m::channel::ChannelId;
-use str0m::format::Codec;
+use str0m::format::{Codec, PayloadParams};
 use str0m::media::{Frequency, MediaKind, MediaTime, Mid};
 use str0m::net::{Protocol, Receive};
 use str0m::rtp::Extension;
@@ -19,6 +19,7 @@ use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcConfig}
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
+use crate::audio::{self, Audio};
 use crate::cursor::Cursor;
 use crate::encoder::Profile;
 use crate::files::{Incoming, Outgoing};
@@ -91,7 +92,12 @@ pub async fn start(state: Arc<AppState>, bind_ip: IpAddr, params: Params) -> Res
 
 struct Session {
     rtc: Rtc,
-    video: Option<(Mid, str0m::format::PayloadParams)>,
+    video: Option<(Mid, PayloadParams)>,
+    audio: Option<(Mid, PayloadParams)>,
+    /// Sound being captured, while the client wants it.
+    sound: Option<Audio>,
+    wants_sound: bool,
+    sound_tx: mpsc::Sender<audio::Packet>,
     control: Option<ChannelId>,
     pipeline: Option<Pipeline>,
     events_tx: mpsc::Sender<PipelineEvent>,
@@ -118,9 +124,14 @@ struct Session {
 async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
     let local = socket.local_addr()?;
     let (events_tx, mut events_rx) = mpsc::channel(32);
+    let (sound_tx, mut sound_rx) = mpsc::channel(16);
     let mut s = Session {
         rtc,
         video: None,
+        audio: None,
+        sound: None,
+        wants_sound: false,
+        sound_tx,
         control: None,
         pipeline: None,
         events_tx,
@@ -202,6 +213,7 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
                 ))?;
             }
             Some(ev) = events_rx.recv() => s.handle_pipeline(ev)?,
+            Some(p) = sound_rx.recv() => s.send_sound(p)?,
             (id, message) = s.outgoing.next() => s.send_copied(id, message),
             _ = tick.tick() => {
                 ticks = ticks.wrapping_add(1);
@@ -244,6 +256,7 @@ impl Session {
                 tracing::info!("{} connected", self.controller);
                 self.banner = Some(Banner::new(self.controller.clone()));
                 self.start_pipeline();
+                self.start_sound();
             }
             Event::MediaAdded(m) if m.kind == MediaKind::Video => {
                 if let Some(w) = self.rtc.writer(m.mid) {
@@ -257,6 +270,13 @@ impl Session {
                     }
                 }
                 self.start_pipeline();
+            }
+            Event::MediaAdded(m) if m.kind == MediaKind::Audio => {
+                if let Some(w) = self.rtc.writer(m.mid) {
+                    let opus = w.payload_params().find(|p| p.spec().codec == Codec::Opus).cloned();
+                    self.audio = opus.map(|p| (m.mid, p));
+                }
+                self.start_sound();
             }
             Event::ChannelOpen(id, label) => {
                 if label == "control" {
@@ -333,6 +353,21 @@ impl Session {
         ));
     }
 
+    fn start_sound(&mut self) {
+        if self.wants_sound && self.sound.is_none() && self.connected && self.audio.is_some() {
+            self.sound = Some(Audio::start(self.sound_tx.clone()));
+        }
+    }
+
+    fn send_sound(&mut self, p: audio::Packet) -> Result<()> {
+        let Some((mid, params)) = &self.audio else { return Ok(()) };
+        let pt = params.pt();
+        let Some(w) = self.rtc.writer(*mid) else { return Ok(()) };
+        let rtp = MediaTime::new(p.time, Frequency::FORTY_EIGHT_KHZ);
+        w.write(pt, Instant::now(), rtp, p.data)?;
+        Ok(())
+    }
+
     fn restart_pipeline(&mut self) {
         self.pipeline = None;
         self.start_pipeline();
@@ -365,6 +400,14 @@ impl Session {
                     self.pipeline = None;
                 } else {
                     self.start_pipeline();
+                }
+            }
+            ClientMsg::SetAudio { enabled } => {
+                self.wants_sound = enabled;
+                if enabled {
+                    self.start_sound();
+                } else {
+                    self.sound = None;
                 }
             }
             ClientMsg::Clipboard { text } => {
