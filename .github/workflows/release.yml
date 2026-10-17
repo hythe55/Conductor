@@ -128,10 +128,11 @@ jobs:
           PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           echo "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/release.jks"
-          printf 'storeFile=%s
-keyAlias=conductor
-password=%s
-' "$RUNNER_TEMP/release.jks" "$PASSWORD" > app/src-tauri/gen/android/keystore.properties
+          {
+            echo "storeFile=$RUNNER_TEMP/release.jks"
+            echo "keyAlias=conductor"
+            echo "password=$PASSWORD"
+          } > app/src-tauri/gen/android/keystore.properties
 
       - name: Build
         working-directory: app
