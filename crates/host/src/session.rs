@@ -43,6 +43,8 @@ const CLIPBOARD_TICKS: u32 = 5;
 /// Clipboard text bigger than this isn't shared. Data channel messages can be
 /// up to 256 KiB both ways, and JSON escaping can make text longer.
 const CLIPBOARD_MAX: usize = 120 * 1024;
+/// Reads of one thing copied before giving up on it.
+const CLIPBOARD_TRIES: u32 = 8;
 /// How much the data channels may queue in all. Files waiting to go out use
 /// at most a quarter, so messages on the control channel always fit.
 const CHANNELS_QUEUED_MAX: usize = 4 << 20;
@@ -594,12 +596,14 @@ struct SharedClipboard {
     seen: u32,
     /// The text both sides have, so it isn't sent back where it came from.
     shared: Option<String>,
+    /// Failed reads of what's on the clipboard, by its sequence number.
+    failures: (u32, u32),
 }
 
 impl SharedClipboard {
     fn new() -> Self {
         // Only what's copied from now on is shared, not what was there before.
-        Self { seen: conductor_clipboard::sequence(), shared: None }
+        Self { seen: conductor_clipboard::sequence(), shared: None, failures: (0, 0) }
     }
 
     /// What was copied on this PC since the last call, unless it's text the
@@ -613,14 +617,28 @@ impl SharedClipboard {
             Some(files) => Ok(Copied::Files(files)),
             None => Ok(conductor_clipboard::read_text(CLIPBOARD_MAX)?.map_or(Copied::Other, Copied::Text)),
         });
+        if self.failures.0 != now {
+            self.failures = (now, 0);
+        }
         let copied = match read {
             Ok(copied) => copied,
-            Err(e) => {
-                // Try again next time.
-                tracing::debug!("reading the clipboard: {e:#}");
+            // Another app may be holding it; try again next time, for a while.
+            Err(e) if self.failures.1 < CLIPBOARD_TRIES => {
+                if self.failures.1 == 0 {
+                    tracing::debug!("reading the clipboard: {e:#}");
+                }
+                self.failures.1 += 1;
                 return None;
             }
+            Err(e) => {
+                tracing::warn!("couldn't read the clipboard: {e:#}");
+                Copied::Other
+            }
         };
+        if matches!(copied, Copied::Other) {
+            let formats = conductor_clipboard::formats().unwrap_or_default();
+            tracing::info!("copied something that isn't text or files (formats {formats:?})");
+        }
         self.seen = now;
         match copied {
             Copied::Text(text) if self.shared.as_ref() == Some(&text) => None,

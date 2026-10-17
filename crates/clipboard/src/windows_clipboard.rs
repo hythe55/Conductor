@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardSequenceNumber, IsClipboardFormatAvailable,
+    CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, GetClipboardSequenceNumber, IsClipboardFormatAvailable,
     OpenClipboard, SetClipboardData,
 };
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock};
@@ -74,7 +74,7 @@ pub fn read_files() -> Result<Option<Vec<PathBuf>>> {
             return Ok(None);
         }
         let _open = Open::new()?;
-        let Ok(handle) = GetClipboardData(format) else { return Ok(None) };
+        let handle = GetClipboardData(format).context("reading the copied files")?;
         let drop = HDROP(handle.0);
         let count = DragQueryFileW(drop, u32::MAX, None);
         let mut files = Vec::with_capacity(count as usize);
@@ -85,6 +85,23 @@ pub fn read_files() -> Result<Option<Vec<PathBuf>>> {
             files.push(PathBuf::from(String::from_utf16_lossy(&buf[..len])));
         }
         Ok(Some(files))
+    }
+}
+
+/// The formats of what's on the clipboard, to say what was copied when it
+/// can't be read.
+pub fn formats() -> Result<Vec<u32>> {
+    unsafe {
+        let _open = Open::new()?;
+        let mut formats = Vec::new();
+        let mut format = 0;
+        loop {
+            format = EnumClipboardFormats(format);
+            if format == 0 {
+                return Ok(formats);
+            }
+            formats.push(format);
+        }
     }
 }
 
