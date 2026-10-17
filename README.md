@@ -7,6 +7,7 @@ Control your Windows PCs from your other devices, over your own [Tailscale](http
 - Hardware video encoding with low latency, and adapts to the connection
 - Sound from the PC you're controlling
 - Copy and paste text between PCs, and send or save files
+- A small picture of each PC's screen in the device list, which each PC can turn off
 - Shows who's in control on the PC's screen, or covers the screen so nobody at the PC sees what you're doing
 - Sends nothing while nobody is watching, and nothing for sound while it's quiet
 - Sleep, restart or shut down a PC from your other devices, and wake it again from another PC on its network once a test wake has worked

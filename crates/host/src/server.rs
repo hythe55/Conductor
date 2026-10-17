@@ -16,6 +16,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::session;
+use crate::settings::Settings;
 use crate::state::AppState;
 
 /// Origins of the bundled desktop/Android app and the web dev server.
@@ -36,6 +37,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/wake", post(wake))
         .route("/api/wake/confirm", post(confirm_wake))
         .route("/api/power", post(power))
+        .route("/api/preview", get(preview))
         .fallback_service(ServeDir::new(&state.web_dir).fallback(ServeFile::new(index)))
         .layer(middleware::from_fn(revalidate_pages))
         .layer(cors)
@@ -144,6 +146,21 @@ pub fn host_info(state: &AppState) -> HostInfo {
         displays: crate::capture::displays().unwrap_or_default(),
         controllers: state.controllers(),
         wake: Some(crate::wake::info()),
+        preview: Settings::load().previews,
+    }
+}
+
+/// A small picture of the main display, for device lists.
+async fn preview() -> Response {
+    if !Settings::load().previews {
+        return (StatusCode::NOT_FOUND, "Previews are turned off on this PC.").into_response();
+    }
+    match crate::preview::take().await {
+        Ok(jpeg) => ([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-store")], jpeg).into_response(),
+        Err(e) => {
+            tracing::warn!("taking a preview: {e:#}");
+            (StatusCode::SERVICE_UNAVAILABLE, format!("{e:#}")).into_response()
+        }
     }
 }
 

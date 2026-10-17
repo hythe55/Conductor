@@ -35,6 +35,7 @@ pub fn run() {
         local::host_status,
         local::set_hosting,
         local::set_auto_update,
+        local::set_previews,
         local::check_for_updates,
         local::install_update,
         local::read_clipboard,

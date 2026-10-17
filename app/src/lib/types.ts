@@ -36,6 +36,8 @@ export interface HostInfo {
    * before 0.1.8, which also can't sleep, restart or shut down when asked.
    */
   wake?: WakeInfo
+  /** `/api/preview` has a picture of its main display. From 0.1.11. */
+  preview?: boolean
 }
 
 export interface WakeInfo {
@@ -78,6 +80,8 @@ export interface ControlStatus {
   version: string
   autoUpdate: boolean
   update: UpdateStatus
+  /** Other devices show a picture of this PC's screen. */
+  previews?: boolean
 }
 
 export type UpdateStatus =

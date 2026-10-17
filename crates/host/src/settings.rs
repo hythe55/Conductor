@@ -157,11 +157,13 @@ pub struct Settings {
     pub hosting: bool,
     /// Install new releases without asking.
     pub auto_update: bool,
+    /// The owner's other devices show a small picture of this PC's screen in their device lists.
+    pub previews: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { hosting: true, auto_update: true }
+        Self { hosting: true, auto_update: true, previews: true }
     }
 }
 

@@ -4,7 +4,7 @@
   import ProblemText from '../components/ProblemText.svelte'
   import Switch from '../components/Switch.svelte'
   import { Problem, toProblem } from '../lib/errors'
-  import { checkForUpdates, hostStatus, installUpdate, setAutoUpdate, setHosting } from '../lib/platform'
+  import { checkForUpdates, hostStatus, installUpdate, setAutoUpdate, setHosting, setPreviews } from '../lib/platform'
   import type { ControlStatus } from '../lib/types'
 
   let { onback }: { onback: () => void } = $props()
@@ -16,6 +16,8 @@
   let updateBusy = $state(false)
   let updateError = $state<Problem | null>(null)
   let autoUpdateError = $state<Problem | null>(null)
+  let previewsBusy = $state(false)
+  let previewsError = $state<Problem | null>(null)
   let version = $state('')
 
   async function refresh() {
@@ -55,6 +57,17 @@
       error = toProblem(e, enabled ? 'Couldn’t turn this on.' : 'Couldn’t turn this off.')
     }
     busy = false
+  }
+
+  async function togglePreviews(enabled: boolean) {
+    previewsBusy = true
+    previewsError = null
+    try {
+      status = await setPreviews(enabled)
+    } catch (e) {
+      previewsError = toProblem(e, enabled ? 'Couldn’t turn on previews.' : 'Couldn’t turn off previews.')
+    }
+    previewsBusy = false
   }
 
   async function runUpdate(action: () => Promise<ControlStatus>, failure: string) {
@@ -128,6 +141,22 @@
           onchange={toggle}
         />
       </div>
+      {#if status?.hosting && status.previews !== undefined}
+        <div class="row">
+          <div class="text">
+            <span class="label" id="previews-label">Show a preview of this screen on my other devices</span>
+            <span class="note" id="previews-note">Updated every 30 seconds while a device list is open. Nothing shows on this PC when it’s taken.</span>
+            {#if previewsError}<div class="note error" role="alert"><ProblemText problem={previewsError} /></div>{/if}
+          </div>
+          <Switch
+            checked={status.previews}
+            disabled={previewsBusy}
+            labelledby="previews-label"
+            describedby="previews-note"
+            onchange={togglePreviews}
+          />
+        </div>
+      {/if}
     </div>
   </section>
 

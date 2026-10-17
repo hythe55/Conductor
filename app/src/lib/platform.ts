@@ -95,6 +95,10 @@ export function setAutoUpdate(enabled: boolean): Promise<ControlStatus> {
   return call('set_auto_update', { enabled })
 }
 
+export function setPreviews(enabled: boolean): Promise<ControlStatus> {
+  return call('set_previews', { enabled })
+}
+
 export function checkForUpdates(): Promise<ControlStatus> {
   return call('check_for_updates')
 }

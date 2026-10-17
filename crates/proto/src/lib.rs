@@ -27,6 +27,8 @@ pub enum ControlRequest {
     SetHosting { enabled: bool },
     #[serde(rename_all = "camelCase")]
     SetAutoUpdate { enabled: bool },
+    #[serde(rename_all = "camelCase")]
+    SetPreviews { enabled: bool },
     CheckForUpdates,
     /// Install the downloaded update now, even if the app is open or someone is connected.
     InstallUpdate,
@@ -46,6 +48,9 @@ pub struct ControlStatus {
     pub auto_update: bool,
     #[serde(default)]
     pub update: UpdateStatus,
+    /// Other devices show a picture of this PC's screen in their device lists.
+    #[serde(default)]
+    pub previews: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -86,6 +91,9 @@ pub struct HostInfo {
     /// down when asked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wake: Option<WakeInfo>,
+    /// `GET /api/preview` returns a small JPEG of the main display. Hosts from 0.1.11.
+    #[serde(default)]
+    pub preview: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

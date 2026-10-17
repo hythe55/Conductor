@@ -30,6 +30,12 @@
   let rows = $state.raw<Record<string, Row>>({})
   let menuFor = $state<string | null>(null)
 
+  /** Pictures of PCs' screens, by device ID, as object URLs. */
+  let previews = $state.raw<Record<string, string>>({})
+  /** When each picture was last asked for. */
+  const previewAt = new Map<string, number>()
+  const PREVIEW_EVERY = 30_000
+
   /** The phone app asks one of the owner's PCs for the list; this is for naming one. */
   let askPc = $state(isPhoneApp && knownPcs().length === 0)
   let pcName = $state('')
@@ -69,6 +75,7 @@
     try {
       all = await listDevices()
       error = null
+      refreshPreviews(all)
       // A PC put to sleep or shut down from here answers again. The list can
       // lag a few seconds behind, so only trust it once that's passed.
       for (const d of all) {
@@ -99,6 +106,52 @@
     }
   })
 
+  // Tracks nothing, so this only runs when the list goes away.
+  let gone = false
+  $effect(() => () => {
+    gone = true
+    for (const url of Object.values(previews)) URL.revokeObjectURL(url)
+  })
+
+  /** Asks PCs that share a picture of their screen for a new one now and then. */
+  function refreshPreviews(list: Device[]) {
+    const now = Date.now()
+    const ids = new Set(list.map((d) => d.id))
+    for (const id of Object.keys(previews)) if (!ids.has(id)) showPreview(id, null)
+    for (const id of previewAt.keys()) if (!ids.has(id)) previewAt.delete(id)
+    for (const d of list) {
+      if (d.isYou) continue
+      if (!d.host?.preview || rows[d.id]?.kind === 'down') {
+        previewAt.delete(d.id)
+        if (previews[d.id]) showPreview(d.id, null)
+        continue
+      }
+      if (now - (previewAt.get(d.id) ?? 0) < PREVIEW_EVERY) continue
+      previewAt.set(d.id, now)
+      fetchPreview(d)
+    }
+  }
+
+  async function fetchPreview(d: Device) {
+    try {
+      const res = await fetch(`${deviceUrl(d)}/api/preview`, { signal: AbortSignal.timeout(8000) })
+      const picture = res.ok ? await res.blob() : null
+      // Asked for again if it's still listed next time.
+      if (gone || !previewAt.has(d.id)) return
+      showPreview(d.id, picture && URL.createObjectURL(picture))
+    } catch {
+      // The last picture stays until the PC answers again or leaves the list.
+    }
+  }
+
+  function showPreview(id: string, url: string | null) {
+    const next = { ...previews }
+    if (next[id]) URL.revokeObjectURL(next[id])
+    if (url) next[id] = url
+    else delete next[id]
+    previews = next
+  }
+
   function retry() {
     error = null
     all = null
@@ -119,7 +172,7 @@
     setTimeout(() => rows[id] === row && set(id, null), problem ? 60_000 : 15_000)
   }
 
-  const gone = (url: string) => async () => !(await reachable(url))
+  const offline = (url: string) => async () => !(await reachable(url))
 
   async function runPower(d: Device, action: PowerAction) {
     const url = deviceUrl(d)
@@ -132,7 +185,7 @@
       note(d.id, `Couldn’t ask ${d.name} to ${verb}. Try again.`, true)
       return
     }
-    if (!(await waitUntil(gone(url), 90_000))) {
+    if (!(await waitUntil(offline(url), 90_000))) {
       note(d.id, `${d.name} didn’t ${verb}. Connect to see what’s holding it up.`, true)
       return
     }
@@ -201,7 +254,7 @@
       note(d.id, `Couldn’t ask ${d.name} to go to sleep.`, true)
       return
     }
-    if (!(await waitUntil(gone(url), 90_000))) {
+    if (!(await waitUntil(offline(url), 90_000))) {
       note(d.id, `${d.name} didn’t go to sleep, so waking wasn’t tested.`, true)
       return
     }
@@ -439,12 +492,17 @@
       {#each list as d (d.id)}
         {@const row = rows[d.id]}
         {@const waker = wakeable(d, row)}
+        {@const preview = availability(d) === 'ready' && row?.kind !== 'down' ? previews[d.id] : undefined}
         <li class={rowClass(d, row)} data-row={d.id} tabindex="-1">
-          <span class="status" aria-hidden="true"></span>
+          <!-- What's on its main display, or blank like a screen that's off. -->
+          <div class="screen" aria-hidden="true">
+            {#if preview}<img src={preview} alt="" />{/if}
+          </div>
           <div class="device">
             <span class="name">{d.name}</span>
             <span class="meta" class:problem={row?.kind === 'note' && row.problem} aria-live="polite">
-              {describe(d, row)}
+              <span class="status" aria-hidden="true"></span>
+              <span>{describe(d, row)}</span>
             </span>
           </div>
           <div class="actions">
@@ -554,9 +612,27 @@
     border-bottom: 1px solid var(--border);
   }
 
+  .screen {
+    width: 80px;
+    aspect-ratio: 16 / 10;
+    overflow: hidden;
+    border-radius: 4px;
+    background: var(--border);
+  }
+
+  .screen img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
   .status {
-    width: 10px;
-    height: 10px;
+    flex: none;
+    width: 8px;
+    height: 8px;
+    /* Centered on the first line of the text after it. */
+    margin-top: 5px;
     border-radius: 50%;
     background: var(--status-offline);
   }
@@ -613,7 +689,10 @@
   }
 
   .meta {
+    display: flex;
+    gap: 6px;
     font-size: var(--text-sm);
+    line-height: 18px;
     color: var(--text-muted);
   }
 
@@ -742,6 +821,14 @@
   @media (max-width: 480px) {
     main {
       padding-inline: var(--space-4);
+    }
+
+    li {
+      column-gap: var(--space-3);
+    }
+
+    .screen {
+      width: 64px;
     }
   }
 </style>

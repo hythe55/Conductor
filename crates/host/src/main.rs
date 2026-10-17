@@ -22,6 +22,7 @@ mod input;
 mod install;
 mod pipeline;
 mod power;
+mod preview;
 mod server;
 mod service;
 mod session;

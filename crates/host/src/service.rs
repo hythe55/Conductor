@@ -168,6 +168,7 @@ impl Supervisor {
             version: env!("CARGO_PKG_VERSION").into(),
             auto_update: self.settings.auto_update,
             update: self.update.clone(),
+            previews: self.settings.previews,
         }
     }
 
@@ -371,6 +372,13 @@ async fn handle_client(pipe: NamedPipeServer, sup: Arc<Mutex<Supervisor>>, wake:
                     sup.settings.auto_update = enabled;
                     sup.settings.save()?;
                     tracing::info!("automatic updates turned {}", if enabled { "on" } else { "off" });
+                }
+            }
+            ControlRequest::SetPreviews { enabled } => {
+                if sup.settings.previews != enabled {
+                    sup.settings.previews = enabled;
+                    sup.settings.save()?;
+                    tracing::info!("previews turned {}", if enabled { "on" } else { "off" });
                 }
             }
             ControlRequest::CheckForUpdates => {
