@@ -1,6 +1,6 @@
 import { Problem, toProblem } from './errors'
-import { COPIED_CHANNEL, FILE_CHANNEL, HostError, receiveFile, sendFile } from './files'
-import { isDesktopApp, saveFile } from './platform'
+import { COPIED_CHANNEL, FILE_CHANNEL, HostError, receiveFile, sendFile, type Sendable } from './files'
+import { isPhoneApp, saveFile, savesToDownloads } from './platform'
 import type { CopiedFile } from './types'
 
 interface Progress {
@@ -33,7 +33,7 @@ export class Transfers {
 
   #openChannel: (label: string) => RTCDataChannel | null
   #pc: () => string
-  #queue: File[] = []
+  #queue: Sendable[] = []
   // Folders dropped with the files, which can't be sent.
   #skippedFolders = 0
   #stopSending: AbortController | null = null
@@ -55,7 +55,7 @@ export class Transfers {
   }
 
   /** Sends files to the Downloads folder on the remote PC, after any already on their way. */
-  send(files: File[], folders = 0) {
+  send(files: Sendable[], folders = 0) {
     this.#clear()
     this.#skippedFolders += folders
     if (!files.length) {
@@ -102,7 +102,7 @@ export class Transfers {
 
   /** Stops everything, for when the session ends. */
   stop() {
-    this.#queue = []
+    this.#dropQueue()
     this.stopSending()
     this.stopSaving()
     clearTimeout(this.#noteTimer)
@@ -114,14 +114,18 @@ export class Transfers {
     // Bytes of the files already sent, and how many there were.
     let before = 0
     let count = 0
-    let file: File | undefined
+    let file: Sendable | undefined
     try {
       while ((file = this.#queue.shift())) {
         if (this.sending) this.sending.current = count + 1
-        const channel = this.#openChannel(FILE_CHANNEL)
-        if (!channel) throw new Problem(`Couldn’t send ${file.name}. ${this.#pc()} isn’t connected right now.`)
-        const start = before
-        await sendFile(channel, file, (bytes) => this.sending && (this.sending.done = start + bytes), stop.signal)
+        try {
+          const channel = this.#openChannel(FILE_CHANNEL)
+          if (!channel) throw new Problem(`Couldn’t send ${file.name}. ${this.#pc()} isn’t connected right now.`)
+          const start = before
+          await sendFile(channel, file, (bytes) => this.sending && (this.sending.done = start + bytes), stop.signal)
+        } finally {
+          file.close?.()
+        }
         before += file.size
         count++
       }
@@ -130,17 +134,18 @@ export class Transfers {
     } catch (e) {
       const rest = this.#queue.length
       const total = count + 1 + rest
-      this.#queue = []
+      this.#dropQueue()
       if (stop.signal.aborted) {
         this.#showNote(stopped(count, total, 'sending', 'sent'))
       } else if (file) {
         const after = notAfter(rest, 'sent')
+        const again = file.shared ? `To try again, share ${rest ? 'the files' : 'it'} again.` : 'Try sending again.'
         this.failure = {
           chip: `Couldn’t send ${file.name}`,
           problem:
             e instanceof HostError
-              ? new Problem(`Couldn’t save ${file.name} on ${this.#pc()}.${after} Try sending again.`, e.message)
-              : toProblem(e, `Couldn’t send ${file.name} to ${this.#pc()}.${after} Try sending again.`),
+              ? new Problem(`Couldn’t save ${file.name} on ${this.#pc()}.${after} ${again}`, e.message)
+              : toProblem(e, `Couldn’t send ${file.name} to ${this.#pc()}.${after} ${again}`),
         }
       }
     } finally {
@@ -168,7 +173,7 @@ export class Transfers {
         await receiveFile(channel, { offer, index }, saveFile, progress, stop.signal)
         before += size
       }
-      this.#showNote(isDesktopApp ? 'Saved to Downloads' : 'Downloaded')
+      this.#showNote(savesToDownloads ? 'Saved to Downloads' : isPhoneApp ? 'Saved in Conductor’s folder' : 'Downloaded')
       // Saved; copying them again offers them again.
       if (this.copied?.offer === offer) this.copied = null
     } catch (e) {
@@ -189,6 +194,11 @@ export class Transfers {
       this.saving = null
       this.#stopSaving = null
     }
+  }
+
+  #dropQueue() {
+    for (const file of this.#queue) file.close?.()
+    this.#queue = []
   }
 
   // A new transfer replaces whatever the handle said about the last one.

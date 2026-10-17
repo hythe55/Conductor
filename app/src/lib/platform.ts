@@ -1,4 +1,5 @@
 import { invoke, type InvokeArgs, type InvokeOptions } from '@tauri-apps/api/core'
+import { android, toBase64 } from './android'
 import { devices as fetchDevices, PORT, Unreachable } from './api'
 import { Problem, toProblem } from './errors'
 import type { FileSink } from './files'
@@ -142,11 +143,30 @@ export async function writeClipboard(text: string): Promise<boolean> {
   }
 }
 
+/** Whether saved files go straight into the Downloads folder, rather than being downloaded. */
+export const savesToDownloads = isDesktopApp || (android?.savesToDownloads() ?? false)
+
 /**
  * Somewhere to save a file from the other PC: straight into the Downloads
- * folder in the app, or a download once it has all arrived in browsers.
+ * folder in the apps, or a download once it has all arrived in browsers.
  */
 export async function saveFile(name: string): Promise<FileSink> {
+  if (android) {
+    const files = android
+    const id = files.beginSave(name)
+    if (id < 0) throw new Error('Android didn’t let Conductor create the file.')
+    return {
+      write: async (data) => {
+        if (!files.writeSave(id, toBase64(data))) throw new Error('Android didn’t let Conductor write the file.')
+      },
+      finish: async () => {
+        const saved = files.finishSave(id)
+        if (!saved) throw new Error('Android didn’t let Conductor finish the file.')
+        return saved
+      },
+      abort: async () => files.abortSave(id),
+    }
+  }
   if (isDesktopApp) {
     const id = await call<number>('begin_save', { name })
     return {

@@ -7,6 +7,7 @@
   import { Problem, toProblem } from '../lib/errors'
   import { devicesFrom, isDesktopApp, isPhoneApp, knownPcs, listDevices } from '../lib/platform'
   import { summary } from '../lib/schedule'
+  import { share } from '../lib/share.svelte'
   import type { Device, HostInfo, PowerAction, PowerSchedule, WakeAdapter } from '../lib/types'
   import { waitUntil, wakerFor } from '../lib/wake'
 
@@ -457,6 +458,18 @@
     }
     return relative.format(Math.round(value), unit)
   }
+
+  // Files shared to the phone app from other apps go to the PC connected to next.
+  function sharedText() {
+    const { files, text, unreadable } = share
+    const notRead = unreadable === 1 ? 'One file couldn’t be read.' : `${unreadable} files couldn’t be read.`
+    if (files.length) {
+      const what = files.length === 1 ? files[0].name : `${files.length} files`
+      return `Connect to a PC to send ${what} to its Downloads folder.${unreadable ? ` ${notRead}` : ''}`
+    }
+    if (text) return 'Only files can be sent to a PC, not text.'
+    return `${notRead} Try sharing again, or from another app.`
+  }
 </script>
 
 <svelte:window onpointerdown={closeMenuOutside} />
@@ -468,6 +481,16 @@
       <button class="link" onclick={onsettings}>Settings</button>
     {/if}
   </header>
+
+  <!-- Always there, so screen readers announce what appears in it. -->
+  <div role="status">
+    {#if share.any}
+      <div class="shared">
+        <p>{sharedText()}</p>
+        <button class="link" onclick={() => share.dismiss()}>{share.files.length ? 'Don’t send' : 'OK'}</button>
+      </div>
+    {/if}
+  </div>
 
   {#if askPc}
     <form class="empty" onsubmit={findDevices}>
@@ -620,6 +643,29 @@
     font-size: var(--text-md);
     font-weight: 600;
     color: var(--text-muted);
+  }
+
+  .shared {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    max-width: 64ch;
+    margin-bottom: var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  .shared p {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .shared .link {
+    flex: none;
   }
 
   .quiet {

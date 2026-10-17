@@ -17,6 +17,17 @@ const WRITE_SIZE = 1024 * 1024
 /** The host couldn't save or read the file. */
 export class HostError extends Error {}
 
+/** A file to send: one picked or dropped, or one shared to the Android app. */
+export interface Sendable {
+  readonly name: string
+  readonly size: number
+  slice(start: number, end: number): { arrayBuffer(): Promise<ArrayBuffer> }
+  /** Shared from another app, so sending it again means sharing it again. */
+  readonly shared?: boolean
+  /** Done with it, sent or not. */
+  close?(): void
+}
+
 /** Where a file from the other PC is written as it arrives. */
 export interface FileSink {
   write(data: ArrayBuffer): Promise<void>
@@ -32,7 +43,7 @@ export interface FileSink {
  */
 export async function sendFile(
   channel: RTCDataChannel,
-  file: File,
+  file: Sendable,
   progress: (bytes: number) => void,
   signal: AbortSignal,
 ): Promise<string> {

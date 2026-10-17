@@ -4,6 +4,7 @@
   import { attachDesktopInput } from '../lib/input'
   import { RemoteSession, type SessionState, type Stats } from '../lib/session'
   import { readClipboard, writeClipboard } from '../lib/platform'
+  import { share } from '../lib/share.svelte'
   import { attachTouchInput } from '../lib/touch'
   import { Transfers } from '../lib/transfers.svelte'
   import type { DisplayInfo, HostInfo, Route, ShownWindow, WindowInfo } from '../lib/types'
@@ -74,6 +75,22 @@
   )
   let dragging = $state(false)
   let dragDepth = 0
+
+  // Files shared to the phone app go to this PC: those waiting when it connects, and any shared while connected.
+  function sendShared() {
+    if (share.files.length) transfers.send(share.take())
+    else if (share.text || share.unreadable) {
+      transfers.failure = {
+        chip: share.text ? 'Only files can be sent' : 'Couldn’t read the shared file',
+        problem: new Problem(
+          share.text
+            ? 'Only files can be sent to a PC, not text. To get text there, type it on the PC.'
+            : 'Couldn’t read what was shared. Try sharing it again, or from another app.',
+        ),
+      }
+      share.dismiss()
+    }
+  }
 
   // Files can be dropped while the remote screen is showing. The app stops
   // other drops from opening the file in place of Conductor.
@@ -155,6 +172,7 @@
       onState(s, e) {
         phase = s
         if (e) error = e
+        if (s === 'connected') sendShared()
       },
       onStream(stream) {
         video.srcObject = stream
@@ -267,13 +285,16 @@
     const onVisibility = () => session.send({ t: 'setPaused', paused: document.hidden })
     const onFullscreen = () => (fullscreen = !!document.fullscreenElement)
     const onFocus = () => void syncClipboard()
+    const onShare = () => phase === 'connected' && sendShared()
     document.addEventListener('visibilitychange', onVisibility)
     document.addEventListener('fullscreenchange', onFullscreen)
     window.addEventListener('focus', onFocus)
+    window.addEventListener('conductorshare', onShare)
     return () => {
       document.removeEventListener('visibilitychange', onVisibility)
       document.removeEventListener('fullscreenchange', onFullscreen)
       window.removeEventListener('focus', onFocus)
+      window.removeEventListener('conductorshare', onShare)
     }
   })
 
