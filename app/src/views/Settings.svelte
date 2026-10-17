@@ -3,8 +3,8 @@
   import Icon from '../components/Icon.svelte'
   import ProblemText from '../components/ProblemText.svelte'
   import Switch from '../components/Switch.svelte'
-  import { type Problem, toProblem } from '../lib/errors'
-  import { hostStatus, setHosting } from '../lib/platform'
+  import { Problem, toProblem } from '../lib/errors'
+  import { checkForUpdates, hostStatus, installUpdate, setAutoUpdate, setHosting } from '../lib/platform'
   import type { ControlStatus } from '../lib/types'
 
   let { onback }: { onback: () => void } = $props()
@@ -13,6 +13,9 @@
   let loaded = $state(false)
   let busy = $state(false)
   let error = $state<Problem | null>(null)
+  let updateBusy = $state(false)
+  let updateError = $state<Problem | null>(null)
+  let autoUpdateError = $state<Problem | null>(null)
   let version = $state('')
 
   async function refresh() {
@@ -54,6 +57,43 @@
     busy = false
   }
 
+  async function runUpdate(action: () => Promise<ControlStatus>, failure: string) {
+    updateBusy = true
+    updateError = null
+    try {
+      status = await action()
+    } catch (e) {
+      updateError = toProblem(e, failure)
+    }
+    updateBusy = false
+  }
+
+  async function toggleAutoUpdate(enabled: boolean) {
+    updateBusy = true
+    autoUpdateError = null
+    try {
+      status = await setAutoUpdate(enabled)
+    } catch (e) {
+      autoUpdateError = toProblem(
+        e,
+        enabled ? 'Couldn’t turn on automatic updates.' : 'Couldn’t turn off automatic updates.',
+      )
+    }
+    updateBusy = false
+  }
+
+  const update = $derived(status?.update)
+  const updateProblem = $derived(
+    update?.state === 'failed'
+      ? new Problem(
+          status?.autoUpdate
+            ? 'It tries again in a few hours.'
+            : 'Check this PC’s internet connection, then check again.',
+          update.message,
+        )
+      : null,
+  )
+
   const hostingNote = $derived.by(() => {
     if (!loaded) return ''
     if (!status) return 'The Conductor service isn’t installed on this PC. Reinstall Conductor to turn this on.'
@@ -73,18 +113,80 @@
       <div class="row">
         <div class="text">
           <span class="label" id="hosting-label">Let my other devices control this PC</span>
-          <span class="note">{hostingNote}</span>
+          <span class="note" id="hosting-note">{hostingNote}</span>
           {#if error}<div class="note error" role="alert"><ProblemText problem={error} /></div>{/if}
         </div>
         <Switch
           checked={status?.hosting ?? false}
           disabled={busy || !status}
           labelledby="hosting-label"
+          describedby="hosting-note"
           onchange={toggle}
         />
       </div>
     </div>
   </section>
+
+  {#if status && update}
+    <section aria-labelledby="updates">
+      <h2 id="updates">Updates</h2>
+      <div class="group">
+        <div class="row">
+          <div class="text">
+            <div class="text" id="update-status" aria-live="polite">
+              {#if update.state === 'checking'}
+                <span class="label">Checking for updates…</span>
+              {:else if update.state === 'upToDate'}
+                <span class="label">Conductor is up to date</span>
+              {:else if update.state === 'ready'}
+                <span class="label">Conductor {update.version} is ready to install</span>
+                <span class="note">Installing restarts Conductor, which takes about a minute. Anyone connected to this PC is disconnected until it’s back.</span>
+              {:else if update.state === 'installing'}
+                <span class="label">Installing Conductor {update.version}…</span>
+                <span class="note">This app closes and opens again when it’s done.</span>
+              {:else if updateProblem}
+                <span class="label">Couldn’t update Conductor</span>
+                <div class="note error"><ProblemText problem={updateProblem} /></div>
+              {:else}
+                <span class="label">Updates haven’t been checked yet</span>
+              {/if}
+            </div>
+            {#if updateError}<div class="note error" role="alert"><ProblemText problem={updateError} /></div>{/if}
+          </div>
+          {#if update.state === 'ready'}
+            <button
+              class="btn primary"
+              disabled={updateBusy}
+              aria-describedby="update-status"
+              onclick={() => runUpdate(installUpdate, 'Couldn’t start the update.')}>Install now</button
+            >
+          {:else if update.state !== 'installing' && update.state !== 'checking'}
+            <button
+              class="btn"
+              disabled={updateBusy}
+              aria-describedby="update-status"
+              onclick={() => runUpdate(checkForUpdates, 'Couldn’t check for updates.')}
+              >{update.state === 'failed' ? 'Check again' : 'Check for updates'}</button
+            >
+          {/if}
+        </div>
+        <div class="row">
+          <div class="text">
+            <span class="label" id="auto-update-label">Install updates automatically</span>
+            <span class="note" id="auto-update-note">Updates install when this app is closed and nobody is connected to this PC.</span>
+            {#if autoUpdateError}<div class="note error" role="alert"><ProblemText problem={autoUpdateError} /></div>{/if}
+          </div>
+          <Switch
+            checked={status.autoUpdate}
+            disabled={updateBusy}
+            labelledby="auto-update-label"
+            describedby="auto-update-note"
+            onchange={toggleAutoUpdate}
+          />
+        </div>
+      </div>
+    </section>
+  {/if}
 
   <section aria-labelledby="about">
     <h2 id="about">About</h2>
@@ -151,6 +253,10 @@
 
   .note.error {
     color: var(--status-error);
+  }
+
+  .row .btn {
+    flex: none;
   }
 
   @media (max-width: 480px) {

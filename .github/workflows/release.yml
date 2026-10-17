@@ -1,0 +1,85 @@
+name: Release
+
+# To release: set the new version in Cargo.toml, app/package.json and
+# app/src-tauri/tauri.conf.json, commit, then push a matching tag (v0.2.0).
+# Installed copies find the release within a few hours and update themselves.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Check versions
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'.TrimStart('v')
+          $cargo = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          $npm = (Get-Content app/package.json | ConvertFrom-Json).version
+          $tauri = (Get-Content app/src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          if ($tag -ne $cargo -or $tag -ne $npm -or $tag -ne $tauri) {
+            throw "Tag $tag doesn't match Cargo.toml ($cargo), package.json ($npm) and tauri.conf.json ($tauri)"
+          }
+          "VERSION=$tag" >> $env:GITHUB_ENV
+
+      - name: Install
+        working-directory: app
+        run: npm ci
+
+      - name: Check web client
+        working-directory: app
+        run: npm run check
+
+      # Also builds the web client and the release host, which the app bundles.
+      - name: Build
+        working-directory: app
+        run: npx tauri build
+
+      - name: Test
+        run: cargo test --workspace
+
+      # The service only installs files signed with this key. Its public half
+      # is crates/host/keys/updater.pub.
+      - name: Sign
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          $name = "Conductor_${env:VERSION}_x64-setup.exe"
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item "target/release/bundle/nsis/$name" release/
+          Push-Location app
+          npx tauri signer sign "../release/$name"
+          Pop-Location
+          if (-not (Test-Path "release/$name.sig")) { throw "Signing failed" }
+
+      - name: Write latest.json
+        env:
+          URL: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}
+        run: |
+          node -e "
+            const fs = require('fs')
+            const version = process.env.VERSION
+            const name = 'Conductor_' + version + '_x64-setup.exe'
+            const signature = Buffer.from(fs.readFileSync('release/' + name + '.sig', 'utf8'), 'base64').toString('utf8')
+            const manifest = { version, windows: { url: process.env.URL + '/' + name, signature } }
+            fs.writeFileSync('release/latest.json', JSON.stringify(manifest, null, 2) + '\n')
+          "
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" release/* --title "Conductor ${{ env.VERSION }}" --generate-notes

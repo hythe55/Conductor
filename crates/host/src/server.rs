@@ -120,6 +120,7 @@ pub fn host_info(state: &AppState) -> HostInfo {
         protocol: PROTOCOL_VERSION,
         os: "windows".into(),
         displays: crate::capture::displays().unwrap_or_default(),
+        controllers: state.controllers(),
     }
 }
 

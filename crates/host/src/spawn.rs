@@ -19,7 +19,7 @@ use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation, SetInformationJobObject,
 };
-use windows::Win32::System::RemoteDesktop::WTSGetActiveConsoleSessionId;
+use windows::Win32::System::RemoteDesktop::{WTSGetActiveConsoleSessionId, WTSQueryUserToken};
 use windows::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, GetCurrentProcess,
     GetExitCodeProcess, OpenProcessToken, PROCESS_INFORMATION, ResumeThread, STARTUPINFOW, TerminateProcess,
@@ -149,6 +149,47 @@ pub fn spawn_in_session(job: &Job, session: u32, exe: &Path, args: &str) -> Resu
         ResumeThread(pi.hThread);
         _ = CloseHandle(pi.hThread);
         Ok(Child { process: pi.hProcess, session, pid: pi.dwProcessId })
+    }
+}
+
+/// Starts `exe` as the user signed in to `session`, like opening it from the Start menu.
+pub fn spawn_as_user(session: u32, exe: &Path) -> Result<()> {
+    unsafe {
+        let mut token = HANDLE::default();
+        WTSQueryUserToken(session, &mut token).context("nobody is signed in to that session")?;
+        let _token_guard = HandleGuard(token);
+
+        let mut env: *mut c_void = std::ptr::null_mut();
+        CreateEnvironmentBlock(&mut env, Some(token), false).context("CreateEnvironmentBlock")?;
+
+        let mut desktop = wide(r"winsta0\default");
+        let si = STARTUPINFOW {
+            cb: size_of::<STARTUPINFOW>() as u32,
+            lpDesktop: PWSTR(desktop.as_mut_ptr()),
+            ..Default::default()
+        };
+        let exe_w = wide(exe);
+        let mut cmdline = wide(format!("\"{}\"", exe.display()));
+        let dir = exe.parent().map(wide);
+        let mut pi = PROCESS_INFORMATION::default();
+        let created = CreateProcessAsUserW(
+            Some(token),
+            PCWSTR(exe_w.as_ptr()),
+            Some(PWSTR(cmdline.as_mut_ptr())),
+            None,
+            None,
+            false,
+            CREATE_UNICODE_ENVIRONMENT,
+            Some(env),
+            dir.as_ref().map_or(PCWSTR::null(), |d| PCWSTR(d.as_ptr())),
+            &si,
+            &mut pi,
+        );
+        _ = DestroyEnvironmentBlock(env);
+        created.context("CreateProcessAsUser")?;
+        _ = CloseHandle(pi.hThread);
+        _ = CloseHandle(pi.hProcess);
+        Ok(())
     }
 }
 

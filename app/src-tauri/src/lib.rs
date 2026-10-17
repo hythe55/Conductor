@@ -9,7 +9,13 @@ mod local;
 pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(windows)]
-    let builder =
-        builder.invoke_handler(tauri::generate_handler![local::devices, local::host_status, local::set_hosting]);
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        local::devices,
+        local::host_status,
+        local::set_hosting,
+        local::set_auto_update,
+        local::check_for_updates,
+        local::install_update,
+    ]);
     builder.run(tauri::generate_context!()).expect("error while running Conductor");
 }

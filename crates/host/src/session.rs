@@ -57,7 +57,7 @@ pub async fn start(state: Arc<AppState>, bind_ip: IpAddr, params: Params) -> Res
     rtc.bwe().set_desired_bitrate(Bitrate::bps(MAX_BITRATE as u64));
 
     tokio::spawn(async move {
-        let _guard = state.session_started();
+        let _guard = state.session_started(params.controller.clone());
         if let Err(e) = run(rtc, socket, params).await {
             tracing::warn!("session ended: {e:#}");
         } else {

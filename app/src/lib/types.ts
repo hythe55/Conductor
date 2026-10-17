@@ -17,6 +17,8 @@ export interface HostInfo {
   protocol: number
   os: string
   displays: DisplayInfo[]
+  /** Devices controlling this PC right now. */
+  controllers?: string[]
 }
 
 export interface Device {
@@ -37,7 +39,14 @@ export interface ControlStatus {
   hosting: boolean
   agentRunning: boolean
   version: string
+  autoUpdate: boolean
+  update: UpdateStatus
 }
+
+export type UpdateStatus =
+  | { state: 'notChecked' | 'checking' | 'upToDate' }
+  | { state: 'ready' | 'installing'; version: string }
+  | { state: 'failed'; message: string }
 
 export type MouseButton = 'left' | 'right' | 'middle' | 'back' | 'forward'
 

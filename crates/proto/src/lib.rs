@@ -21,6 +21,11 @@ pub enum ControlRequest {
     Status,
     #[serde(rename_all = "camelCase")]
     SetHosting { enabled: bool },
+    #[serde(rename_all = "camelCase")]
+    SetAutoUpdate { enabled: bool },
+    CheckForUpdates,
+    /// Install the downloaded update now, even if the app is open or someone is connected.
+    InstallUpdate,
 }
 
 /// The service's reply to every [`ControlRequest`].
@@ -32,6 +37,28 @@ pub struct ControlStatus {
     /// The agent that serves sessions is running right now.
     pub agent_running: bool,
     pub version: String,
+    /// Updates install on their own when nobody is using Conductor.
+    #[serde(default)]
+    pub auto_update: bool,
+    #[serde(default)]
+    pub update: UpdateStatus,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum UpdateStatus {
+    /// No check since the service started.
+    #[default]
+    NotChecked,
+    Checking,
+    UpToDate,
+    /// Downloaded and verified, waiting until nobody is using Conductor.
+    #[serde(rename_all = "camelCase")]
+    Ready { version: String },
+    #[serde(rename_all = "camelCase")]
+    Installing { version: String },
+    #[serde(rename_all = "camelCase")]
+    Failed { message: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +69,9 @@ pub struct HostInfo {
     pub protocol: u32,
     pub os: String,
     pub displays: Vec<DisplayInfo>,
+    /// Names of the devices controlling this PC right now.
+    #[serde(default)]
+    pub controllers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

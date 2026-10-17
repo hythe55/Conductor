@@ -55,9 +55,28 @@ pub async fn host_status() -> Result<Option<ControlStatus>, Problem> {
 
 #[tauri::command]
 pub async fn set_hosting(enabled: bool) -> Result<ControlStatus, Problem> {
-    call(&ControlRequest::SetHosting { enabled }).await.map_err(|e| {
+    request(ControlRequest::SetHosting { enabled }).await
+}
+
+#[tauri::command]
+pub async fn set_auto_update(enabled: bool) -> Result<ControlStatus, Problem> {
+    request(ControlRequest::SetAutoUpdate { enabled }).await
+}
+
+#[tauri::command]
+pub async fn check_for_updates() -> Result<ControlStatus, Problem> {
+    request(ControlRequest::CheckForUpdates).await
+}
+
+#[tauri::command]
+pub async fn install_update() -> Result<ControlStatus, Problem> {
+    request(ControlRequest::InstallUpdate).await
+}
+
+async fn request(request: ControlRequest) -> Result<ControlStatus, Problem> {
+    call(&request).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            Problem::new("The Conductor service isn't installed. Reinstall Conductor to turn this on.", e)
+            Problem::new("The Conductor service isn't installed. Reinstall Conductor to change this.", e)
         } else {
             Problem::new(NO_SERVICE, e)
         }

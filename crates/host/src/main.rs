@@ -13,6 +13,7 @@ mod convert;
 mod desktop;
 mod displays;
 mod encoder;
+mod https;
 mod indicator;
 mod input;
 mod install;
@@ -23,6 +24,7 @@ mod session;
 mod settings;
 mod spawn;
 mod state;
+mod update;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -94,7 +96,14 @@ fn main() -> Result<()> {
             install::uninstall()
         }
         Mode::Service => {
+            // Before anything is written there as SYSTEM.
+            let secured = settings::secure_data_dir();
             init_logging(Some("service.log"));
+            match secured {
+                Ok(Some(note)) => tracing::warn!("{note}"),
+                Ok(None) => {}
+                Err(e) => tracing::error!("securing the data folder: {e:#}"),
+            }
             service::run()
         }
         Mode::Agent | Mode::Foreground => {

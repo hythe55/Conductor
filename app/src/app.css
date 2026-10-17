@@ -133,6 +133,12 @@ button {
   background: var(--accent-hover);
 }
 
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}
+
 @media (pointer: coarse) {
   .btn {
     min-height: var(--touch-target);

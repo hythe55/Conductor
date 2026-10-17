@@ -13,7 +13,7 @@
   nsExec::ExecToLog '"$INSTDIR\conductor-host.exe" install'
   Pop $0
   ${If} $0 != 0
-    MessageBox MB_ICONEXCLAMATION "Conductor was installed, but its background service couldn't be set up, so other devices can't control this PC yet. Try installing again."
+    MessageBox MB_ICONEXCLAMATION "Conductor was installed, but its background service couldn't be set up, so other devices can't control this PC yet. Try installing again." /SD IDOK
   ${EndIf}
 !macroend
 

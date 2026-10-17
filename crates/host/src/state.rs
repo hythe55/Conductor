@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -23,10 +23,11 @@ pub struct AppState {
     pub tailscale_ip: IpAddr,
     pub gate: Gate,
     pub web_dir: PathBuf,
-    sessions: AtomicUsize,
+    /// Sessions in progress, by id, with the name of the device on the other end.
+    sessions: std::sync::Mutex<Vec<(u64, String)>>,
+    next_session: AtomicU64,
     status: Mutex<(Status, Instant)>,
     devices: Mutex<Option<(Vec<Device>, Instant)>>,
-    /// Names of the owner's machines, for checking request origins.
     /// Names and addresses of the owner's own devices, lowercase.
     own_hosts: RwLock<HashSet<String>>,
 }
@@ -41,7 +42,8 @@ impl AppState {
             tailscale_ip,
             gate: Gate::new(&status)?,
             web_dir,
-            sessions: AtomicUsize::new(0),
+            sessions: std::sync::Mutex::new(Vec::new()),
+            next_session: AtomicU64::new(1),
             own_hosts: RwLock::new(own_hosts(&status)),
             status: Mutex::new((status, Instant::now())),
             devices: Mutex::new(None),
@@ -49,9 +51,15 @@ impl AppState {
         Ok(state)
     }
 
-    pub fn session_started(self: &Arc<Self>) -> SessionGuard {
-        self.sessions.fetch_add(1, Ordering::Relaxed);
-        SessionGuard(self.clone())
+    pub fn session_started(self: &Arc<Self>, controller: String) -> SessionGuard {
+        let id = self.next_session.fetch_add(1, Ordering::Relaxed);
+        self.sessions.lock().unwrap().push((id, controller));
+        SessionGuard(self.clone(), id)
+    }
+
+    /// Names of the devices with a session open, in the order they connected.
+    pub fn controllers(&self) -> Vec<String> {
+        self.sessions.lock().unwrap().iter().map(|(_, name)| name.clone()).collect()
     }
 
     async fn status(&self) -> Status {
@@ -126,10 +134,10 @@ fn own_hosts(status: &Status) -> HashSet<String> {
     hosts
 }
 
-pub struct SessionGuard(Arc<AppState>);
+pub struct SessionGuard(Arc<AppState>, u64);
 
 impl Drop for SessionGuard {
     fn drop(&mut self) {
-        self.0.sessions.fetch_sub(1, Ordering::Relaxed);
+        self.0.sessions.lock().unwrap().retain(|(id, _)| *id != self.1);
     }
 }
