@@ -88,6 +88,21 @@ impl AppState {
         devices.into_iter().map(|d| Device { is_you: requester_ips(&d), ..d }).collect()
     }
 
+    /// The tailnet name of the device at `ip`, for showing people who's connected.
+    pub async fn device_name(&self, ip: IpAddr) -> String {
+        if ip.is_loopback() {
+            return self.name.clone();
+        }
+        let status = self.status_within(Duration::from_secs(5)).await;
+        status
+            .self_node
+            .iter()
+            .chain(status.peer.values())
+            .find(|n| n.tailscale_ips.contains(&ip))
+            .map(|n| n.host_name.clone())
+            .unwrap_or_else(|| ip.to_string())
+    }
+
     /// Whether `host` (lowercase, no port) names one of the owner's devices.
     /// A miss refreshes the device list, in case the device was just added.
     pub async fn is_own_device(&self, host: &str) -> bool {

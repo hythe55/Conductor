@@ -19,6 +19,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
 use crate::encoder::Profile;
+use crate::indicator::{Area, Banner};
 use crate::input::Injector;
 use crate::pipeline::{Config, Control, Pipeline, PipelineEvent};
 use crate::state::AppState;
@@ -30,6 +31,8 @@ const MAX_BITRATE: u32 = 40_000_000;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct Params {
+    /// Name of the device asking to control this PC, for the on-screen banner.
+    pub controller: String,
     pub offer: String,
     pub display: Option<String>,
     pub max_size: (u32, u32),
@@ -72,6 +75,8 @@ struct Session {
     events_tx: mpsc::Sender<PipelineEvent>,
     injector: Injector,
     display: Option<String>,
+    controller: String,
+    banner: Option<Banner>,
     max_size: (u32, u32),
     bitrate: u32,
     connected: bool,
@@ -89,6 +94,8 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params) -> Result<()> {
         events_tx,
         injector: Injector::new(),
         display: params.display,
+        controller: params.controller,
+        banner: None,
         max_size: params.max_size,
         bitrate: START_BITRATE,
         connected: false,
@@ -146,6 +153,8 @@ impl Session {
             Event::IceConnectionStateChange(IceConnectionState::Disconnected) => return Ok(false),
             Event::Connected => {
                 self.connected = true;
+                tracing::info!("{} connected", self.controller);
+                self.banner = Some(Banner::new(self.controller.clone()));
                 self.start_pipeline();
             }
             Event::MediaAdded(m) if m.kind == MediaKind::Video => {
@@ -276,6 +285,9 @@ impl Session {
                 let id = display.clone();
                 tracing::info!("streaming {id} at {width}x{height} via {encoder}");
                 self.injector.set_display(origin, size);
+                if let Some(b) = &self.banner {
+                    b.set_area(Area { x: origin.0, y: origin.1, width: size.0, height: size.1 });
+                }
                 self.display = Some(display.clone());
                 let displays = crate::capture::displays().unwrap_or_default();
                 self.send(&HostMsg::Displays { displays, active: display });

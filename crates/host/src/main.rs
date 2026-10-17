@@ -13,6 +13,7 @@ mod convert;
 mod desktop;
 mod displays;
 mod encoder;
+mod indicator;
 mod input;
 mod install;
 mod pipeline;

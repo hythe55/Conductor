@@ -125,9 +125,11 @@ pub fn host_info(state: &AppState) -> HostInfo {
 
 async fn create_session(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<SessionRequest>,
 ) -> Result<Json<SessionResponse>, (StatusCode, String)> {
     let params = session::Params {
+        controller: state.device_name(peer.ip()).await,
         offer: req.sdp,
         display: req.display,
         max_size: (req.max_width.unwrap_or(2560).clamp(320, 7680), req.max_height.unwrap_or(1600).clamp(240, 4320)),
