@@ -6,7 +6,8 @@
 //! underneath. They live on their own thread with a message loop, on the
 //! desktop the process started on (the user's normal desktop). Windows keeps
 //! some things above any app's window, such as the Start menu, so the cover
-//! hides most of the screen rather than all of it.
+//! hides most of the screen rather than all of it. While the cover is up, the
+//! PC's own keyboard and mouse are off too (see [`crate::block`]).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -196,6 +197,8 @@ fn wanted() -> HashMap<(Area, bool), Vec<String>> {
 /// Makes the windows match the active sessions.
 fn reconcile(windows: &mut HashMap<(Area, bool), HWND>, supported: &mut bool) {
     let wanted = wanted();
+    // Only while the cover says so, so whoever is at the PC knows why.
+    let blocked = crate::block::set(*supported && wanted.keys().any(|(_, cover)| *cover));
     windows.retain(|key, hwnd| {
         let keep = wanted.contains_key(key);
         if !keep {
@@ -216,11 +219,16 @@ fn reconcile(windows: &mut HashMap<(Area, bool), HWND>, supported: &mut bool) {
                     // would put it on the controlling device's screen, so don't.
                     tracing::info!("banner unavailable: {e:#}");
                     *supported = false;
+                    crate::block::set(false);
                     return;
                 }
             },
         };
-        let text = if cover { format!("{}. This screen is hidden.", label(&names)) } else { label(&names) };
+        let text = match (cover, blocked) {
+            (false, _) => label(&names),
+            (true, false) => format!("{}. This screen is hidden.", label(&names)),
+            (true, true) => format!("{}. This screen is hidden, and its keyboard and mouse are off.", label(&names)),
+        };
         tracing::debug!("{} on {area:?}: {text}", if cover { "cover" } else { "banner" });
         place(hwnd, area, &text, cover);
     }

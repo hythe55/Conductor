@@ -9,6 +9,7 @@
 //! ```
 
 mod audio;
+mod block;
 mod capture;
 mod convert;
 mod cursor;

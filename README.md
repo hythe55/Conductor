@@ -8,7 +8,7 @@ Control your Windows PCs from your other devices, over your own [Tailscale](http
 - Sound from the PC you're controlling
 - Copy and paste text between PCs, and send or save files
 - A small picture of each PC's screen in the device list, which each PC can turn off
-- Shows who's in control on the PC's screen, or covers the screen so nobody at the PC sees what you're doing
+- Shows who's in control on the PC's screen, or covers the screen and turns off its keyboard and mouse so nobody at the PC sees or gets in the way of what you're doing
 - Sends nothing while nobody is watching, and nothing for sound while it's quiet
 - Sleep, restart or shut down a PC from your other devices, now or on a schedule, and wake it again from another PC on its network once a test wake has worked
 - Updates itself from GitHub releases when nobody is using it
