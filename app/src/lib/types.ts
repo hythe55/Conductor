@@ -40,6 +40,8 @@ export interface HostInfo {
   preview?: boolean
   /** Power actions it takes at set times. Missing before 0.1.11. */
   schedule?: PowerSchedule[]
+  /** Takes `pen` messages, with pressure and tilt. From 0.1.11. */
+  pen?: boolean
 }
 
 /** Something a PC does on its own at a set time, unless it's in use. */
@@ -107,6 +109,19 @@ export type ClientMsg =
   | { t: 'mouseDelta'; dx: number; dy: number }
   | { t: 'mouseButton'; button: MouseButton; down: boolean }
   | { t: 'wheel'; dx: number; dy: number }
+  | {
+      t: 'pen'
+      x: number
+      y: number
+      contact: boolean
+      pressure: number
+      tiltX: number
+      tiltY: number
+      twist: number
+      barrel: boolean
+      eraser: boolean
+    }
+  | { t: 'penLeave' }
   | { t: 'key'; code: string; down: boolean }
   | { t: 'text'; text: string }
   | { t: 'releaseAll' }

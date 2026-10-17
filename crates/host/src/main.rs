@@ -21,6 +21,7 @@ mod https;
 mod indicator;
 mod input;
 mod install;
+mod pen;
 mod pipeline;
 mod power;
 mod preview;

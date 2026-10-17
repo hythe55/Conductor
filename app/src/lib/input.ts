@@ -28,7 +28,14 @@ export interface DesktopInputOptions {
   localShortcut(e: KeyboardEvent): boolean
   /** Gets this device's clipboard text when the user pastes, before the paste keys are sent. */
   onPaste?(text: string): void
+  /** The host takes pens, with their pressure and tilt. Otherwise a pen works as a mouse. */
+  pen?: boolean
 }
+
+// PointerEvent.buttons for a pen: touching, the button on its side, and its eraser end.
+const PEN_TIP = 1
+const PEN_BARREL = 2
+const PEN_ERASER = 32
 
 /** How long to wait for the browser's paste event before sending the paste keys anyway. */
 const PASTE_WAIT_MS = 150
@@ -38,7 +45,7 @@ function isPaste(e: KeyboardEvent) {
   return (e.ctrlKey && e.code === 'KeyV') || (e.shiftKey && !e.ctrlKey && e.code === 'Insert')
 }
 
-/** Mouse, wheel and keyboard for desktop browsers and the desktop app. */
+/** Mouse, pen, wheel and keyboard for desktop browsers and the desktop app. */
 export function attachDesktopInput(
   surface: HTMLElement,
   video: HTMLVideoElement,
@@ -75,8 +82,35 @@ export function attachDesktopInput(
     pending = null
   }
 
+  const isPen = (e: PointerEvent) => !!opts.pen && e.pointerType === 'pen'
+  // Browsers only say it's the eraser end while it touches, so hovering keeps
+  // whichever end last touched until the pen moves away.
+  let eraser = false
+
+  const sendPen = (e: PointerEvent) => {
+    if (e.buttons & (PEN_TIP | PEN_ERASER)) eraser = (e.buttons & PEN_ERASER) !== 0
+    else if (e.button === 5) eraser = true
+    send({
+      t: 'pen',
+      ...normalized(video, e.clientX, e.clientY),
+      contact: (e.buttons & (PEN_TIP | PEN_ERASER)) !== 0,
+      pressure: e.pressure,
+      tiltX: Math.round(e.tiltX),
+      tiltY: Math.round(e.tiltY),
+      twist: Math.round(e.twist),
+      barrel: (e.buttons & PEN_BARREL) !== 0,
+      eraser,
+    })
+  }
+
   const onMove = (e: PointerEvent) => {
     if (e.pointerType === 'touch') return
+    if (isPen(e)) {
+      // Every point the pen passed through since the last event, for smooth strokes.
+      const points = e.getCoalescedEvents?.() ?? []
+      for (const p of points.length ? points : [e]) sendPen(p)
+      return
+    }
     pending = normalized(video, e.clientX, e.clientY)
     if (!frame) frame = requestAnimationFrame(flushMove)
   }
@@ -86,6 +120,7 @@ export function attachDesktopInput(
     e.preventDefault()
     surface.focus()
     surface.setPointerCapture(e.pointerId)
+    if (isPen(e)) return sendPen(e)
     send({ t: 'mouseMove', ...normalized(video, e.clientX, e.clientY) })
     const button = BUTTONS[e.button]
     if (button) send({ t: 'mouseButton', button, down: true })
@@ -94,6 +129,7 @@ export function attachDesktopInput(
   const onUp = (e: PointerEvent) => {
     if (e.pointerType === 'touch') return
     e.preventDefault()
+    if (isPen(e)) return sendPen(e)
     const button = BUTTONS[e.button]
     if (button) send({ t: 'mouseButton', button, down: false })
   }
@@ -131,12 +167,21 @@ export function attachDesktopInput(
     }
   }
 
+  // Out of range, or the browser took it over.
+  const onPenGone = (e: PointerEvent) => {
+    if (!isPen(e)) return
+    eraser = false
+    send({ t: 'penLeave' })
+  }
+
   const release = () => send({ t: 'releaseAll' })
   const noMenu = (e: Event) => e.preventDefault()
 
   surface.addEventListener('pointermove', onMove)
   surface.addEventListener('pointerdown', onDown)
   surface.addEventListener('pointerup', onUp)
+  surface.addEventListener('pointerleave', onPenGone)
+  surface.addEventListener('pointercancel', onPenGone)
   surface.addEventListener('wheel', onWheel, { passive: false })
   surface.addEventListener('contextmenu', noMenu)
   window.addEventListener('keydown', onKey, true)
@@ -151,6 +196,8 @@ export function attachDesktopInput(
     surface.removeEventListener('pointermove', onMove)
     surface.removeEventListener('pointerdown', onDown)
     surface.removeEventListener('pointerup', onUp)
+    surface.removeEventListener('pointerleave', onPenGone)
+    surface.removeEventListener('pointercancel', onPenGone)
     surface.removeEventListener('wheel', onWheel)
     surface.removeEventListener('contextmenu', noMenu)
     window.removeEventListener('keydown', onKey, true)

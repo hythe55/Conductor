@@ -1,4 +1,4 @@
-//! Keyboard and mouse injection with SendInput.
+//! Keyboard and mouse injection with SendInput, and pens through [`crate::pen`].
 //!
 //! Keys arrive as DOM `KeyboardEvent.code` values (physical positions) and are
 //! sent as scan codes, so the host's own keyboard layout decides the character.
@@ -9,11 +9,17 @@ use conductor_proto::MouseButton;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+pub use crate::pen::Pen;
+use crate::pen::PenInjector;
+
 pub struct Injector {
     /// Streamed display rectangle in virtual-desktop pixels.
     display: (i32, i32, u32, u32),
     held_keys: HashSet<String>,
     held_buttons: HashSet<u8>,
+    pen: PenInjector,
+    /// The pen is touching, on a PC where it works as a mouse.
+    pen_mouse_down: bool,
 }
 
 fn send(inputs: &[INPUT]) {
@@ -74,17 +80,27 @@ fn button_id(b: MouseButton) -> u8 {
 
 impl Injector {
     pub fn new() -> Self {
-        Self { display: (0, 0, 1, 1), held_keys: HashSet::new(), held_buttons: HashSet::new() }
+        Self {
+            display: (0, 0, 1, 1),
+            held_keys: HashSet::new(),
+            held_buttons: HashSet::new(),
+            pen: PenInjector::default(),
+            pen_mouse_down: false,
+        }
     }
 
     pub fn set_display(&mut self, origin: (i32, i32), size: (u32, u32)) {
         self.display = (origin.0, origin.1, size.0.max(1), size.1.max(1));
     }
 
-    pub fn mouse_move(&self, x: f32, y: f32) {
+    /// A point normalized to the streamed display, in virtual-desktop pixels.
+    fn pixel(&self, x: f32, y: f32) -> (f64, f64) {
         let (dx, dy, dw, dh) = self.display;
-        let px = dx as f64 + (x.clamp(0.0, 1.0) as f64) * (dw - 1) as f64;
-        let py = dy as f64 + (y.clamp(0.0, 1.0) as f64) * (dh - 1) as f64;
+        (dx as f64 + (x.clamp(0.0, 1.0) as f64) * (dw - 1) as f64, dy as f64 + (y.clamp(0.0, 1.0) as f64) * (dh - 1) as f64)
+    }
+
+    pub fn mouse_move(&self, x: f32, y: f32) {
+        let (px, py) = self.pixel(x, y);
         let (vx, vy, vw, vh) = unsafe {
             (
                 GetSystemMetrics(SM_XVIRTUALSCREEN),
@@ -123,6 +139,31 @@ impl Injector {
         send(&inputs);
     }
 
+    pub fn pen(&mut self, p: Pen) {
+        let (px, py) = self.pixel(p.x, p.y);
+        if self.pen.update(&p, (px.round() as i32, py.round() as i32)) {
+            return;
+        }
+        self.mouse_move(p.x, p.y);
+        if p.contact != self.pen_mouse_down {
+            self.pen_mouse_down = p.contact;
+            self.button(MouseButton::Left, p.contact);
+        }
+    }
+
+    pub fn pen_leave(&mut self) {
+        self.pen.leave();
+        if self.pen_mouse_down {
+            self.pen_mouse_down = false;
+            self.button(MouseButton::Left, false);
+        }
+    }
+
+    /// Called every so often while the session runs.
+    pub fn tick(&mut self) {
+        self.pen.tick();
+    }
+
     pub fn key(&mut self, code: &str, down: bool) {
         if down {
             self.held_keys.insert(code.to_string());
@@ -159,6 +200,7 @@ impl Injector {
     }
 
     pub fn release_all(&mut self) {
+        self.pen_leave();
         for code in std::mem::take(&mut self.held_keys) {
             self.key(&code, false);
         }

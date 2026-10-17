@@ -98,6 +98,9 @@ pub struct HostInfo {
     /// Missing from hosts older than 0.1.11.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule: Option<Vec<PowerSchedule>>,
+    /// Takes [`ClientMsg::Pen`]. Hosts from 0.1.11.
+    #[serde(default)]
+    pub pen: bool,
 }
 
 /// Something a PC does on its own at a set time, unless it's in use.
@@ -292,6 +295,35 @@ pub enum ClientMsg {
     /// Wheel delta in Windows units (120 = one notch).
     #[serde(rename_all = "camelCase")]
     Wheel { dx: i32, dy: i32 },
+    /// A pen over the picture or touching it, so apps here get its pressure
+    /// and tilt. Only sent to hosts with [`HostInfo::pen`].
+    #[serde(rename_all = "camelCase")]
+    Pen {
+        /// Normalized to the streamed display, like [`ClientMsg::MouseMove`].
+        x: f32,
+        y: f32,
+        /// Touching the screen, rather than hovering over it.
+        contact: bool,
+        /// 0 to 1.
+        #[serde(default)]
+        pressure: f32,
+        /// Degrees, -90 to 90.
+        #[serde(default)]
+        tilt_x: i32,
+        #[serde(default)]
+        tilt_y: i32,
+        /// Degrees clockwise, 0 to 359.
+        #[serde(default)]
+        twist: u32,
+        /// The button on its side is held.
+        #[serde(default)]
+        barrel: bool,
+        /// Its eraser end is in use.
+        #[serde(default)]
+        eraser: bool,
+    },
+    /// The pen moved away from the picture.
+    PenLeave,
     /// Physical key, as a DOM `KeyboardEvent.code` value.
     #[serde(rename_all = "camelCase")]
     Key { code: String, down: bool },

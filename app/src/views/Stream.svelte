@@ -260,7 +260,11 @@
 
   $effect(() => {
     const send = (m: Parameters<typeof session.send>[0]) => session.send(m)
-    const detachDesktop = attachDesktopInput(surface, video, send, { localShortcut, onPaste: shareClipboard })
+    const detachDesktop = attachDesktopInput(surface, video, send, {
+      localShortcut,
+      onPaste: shareClipboard,
+      pen: !!info.pen,
+    })
     const detachTouch = attachTouchInput(surface, video, pointer, send, {
       displayWidth: () =>
         shownWindow?.width || displays.find((d) => d.id === activeDisplay)?.width || video.videoWidth || 1920,

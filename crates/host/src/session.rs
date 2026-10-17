@@ -25,7 +25,7 @@ use crate::encoder::Profile;
 use crate::files::{Incoming, Outgoing};
 use crate::indicator::{Area, Banner};
 use crate::power::KeepAwake;
-use crate::input::Injector;
+use crate::input::{Injector, Pen};
 use crate::pipeline::{Config, Control, Pipeline, PipelineEvent};
 use crate::state::AppState;
 use crate::window;
@@ -266,6 +266,7 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params, mut route_rx: mpsc::Re
             (id, message) = s.outgoing.next() => s.send_copied(id, message),
             _ = tick.tick() => {
                 ticks = ticks.wrapping_add(1);
+                s.injector.tick();
                 if s.retry_at.is_some_and(|t| t <= Instant::now()) {
                     s.retry_at = None;
                     s.start_pipeline();
@@ -451,6 +452,10 @@ impl Session {
             ClientMsg::MouseDelta { dx, dy } => self.injector.mouse_delta(dx, dy),
             ClientMsg::MouseButton { button, down } => self.injector.button(button, down),
             ClientMsg::Wheel { dx, dy } => self.injector.wheel(dx, dy),
+            ClientMsg::Pen { x, y, contact, pressure, tilt_x, tilt_y, twist, barrel, eraser } => {
+                self.injector.pen(Pen { x, y, contact, pressure, tilt_x, tilt_y, twist, barrel, eraser })
+            }
+            ClientMsg::PenLeave => self.injector.pen_leave(),
             ClientMsg::Key { code, down } => self.injector.key(&code, down),
             ClientMsg::Text { text } => self.injector.text(&text),
             ClientMsg::ReleaseAll => self.injector.release_all(),
