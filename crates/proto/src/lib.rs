@@ -180,6 +180,10 @@ pub struct Device {
     pub last_seen: Option<String>,
     /// Present when Conductor is running there and answered.
     pub host: Option<HostInfo>,
+    /// Tailscale says it's online, but it hasn't answered over the tailnet
+    /// lately. Tailscale can take hours to notice a PC went to sleep.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub silent: bool,
     /// How to wake it: from `host` when online, or remembered from when it
     /// last was.
     #[serde(default, skip_serializing_if = "Option::is_none")]

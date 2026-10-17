@@ -296,7 +296,7 @@
 
   function availability(d: Device): 'ready' | 'not-running' | 'offline' {
     if (d.host) return 'ready'
-    return d.online ? 'not-running' : 'offline'
+    return d.online && !d.silent ? 'not-running' : 'offline'
   }
 
   function describe(d: Device, row: Row | undefined) {
@@ -307,10 +307,14 @@
         return `${n} ${n === 1 ? 'display' : 'displays'}`
       }
       case 'not-running':
-        // Tailscale can call a PC online for a while after it goes to sleep.
-        return d.wake ? 'Not responding. It may be asleep.' : 'Conductor isn’t running'
+        return 'Conductor isn’t running'
       case 'offline': {
-        const seen = d.lastSeen ? `Offline, last seen ${ago(d.lastSeen)}` : 'Offline'
+        // Tailscale can call a PC online for hours after it went to sleep.
+        const seen = d.silent
+          ? 'Not answering, likely asleep'
+          : d.lastSeen
+            ? `Offline, last seen ${ago(d.lastSeen)}`
+            : 'Offline'
         return d.wake?.verified && !wakerFor(d, all ?? []) ? `${seen}. To wake it, turn on another PC on its network.` : seen
       }
     }

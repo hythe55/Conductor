@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result, bail};
 use conductor_proto::Route;
@@ -85,6 +85,10 @@ pub struct Node {
     /// Set while another device on the tailnet relays traffic to the peer.
     #[serde(default)]
     pub peer_relay: String,
+    /// When this machine and the peer last agreed on keys for the tunnel
+    /// (RFC 3339). Tailscale reports year 1 when they never have.
+    #[serde(default)]
+    pub last_handshake: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -141,6 +145,15 @@ impl Node {
         self.last_seen.as_deref().filter(|t| !t.starts_with("0001-"))
     }
 
+    /// Whether the peer has answered over the tunnel in the last few minutes.
+    /// Keys are agreed again every two minutes while traffic flows, and before
+    /// any traffic after that, so a peer that's awake and was just sent
+    /// something always has a recent handshake.
+    pub fn answered_lately(&self) -> bool {
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+        self.last_handshake.as_deref().and_then(unix_seconds).is_some_and(|t| now - t < 180)
+    }
+
     /// How traffic to this peer travels right now.
     pub fn route(&self) -> Route {
         if !self.cur_addr.is_empty() {
@@ -158,6 +171,37 @@ impl Node {
         let label = fqdn.split('.').next().filter(|l| !l.is_empty()).unwrap_or(&self.host_name);
         label.to_ascii_lowercase()
     }
+}
+
+/// Seconds since 1970 for an RFC 3339 time such as `2026-10-17T11:53:54.0554147-04:00`.
+fn unix_seconds(t: &str) -> Option<i64> {
+    let num = |s: &str| s.parse::<i64>().ok();
+    let (date, rest) = t.split_once('T')?;
+    let mut ymd = date.splitn(3, '-').map(num);
+    let (y, m, d) = (ymd.next()??, ymd.next()??, ymd.next()??);
+    let (clock, offset) = match rest.find(['Z', 'z', '+', '-']) {
+        Some(i) => rest.split_at(i),
+        None => return None,
+    };
+    let clock = clock.split('.').next()?;
+    let mut hms = clock.splitn(3, ':').map(num);
+    let (h, min, s) = (hms.next()??, hms.next()??, hms.next()??);
+    let offset = match offset.as_bytes().first() {
+        Some(b'+' | b'-') => {
+            let (oh, om) = offset[1..].split_once(':')?;
+            let secs = num(oh)? * 3600 + num(om)? * 60;
+            if offset.starts_with('-') { -secs } else { secs }
+        }
+        _ => 0,
+    };
+    // Days from 1970-01-01 to y-m-d in the proleptic Gregorian calendar.
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + h * 3600 + min * 60 + s - offset)
 }
 
 /// Decides whether a peer may connect: it must belong to the same tailnet
@@ -207,6 +251,16 @@ mod tests {
         let w: WhoIs = serde_json::from_str(json).unwrap();
         assert_eq!(w.user_profile.unwrap().id, 42);
         assert_eq!(w.node.unwrap().user, 42);
+    }
+
+    #[test]
+    fn times() {
+        assert_eq!(unix_seconds("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(unix_seconds("2026-10-17T15:53:54.0554147Z"), Some(1_792_252_434));
+        assert_eq!(unix_seconds("2026-10-17T11:53:54.0554147-04:00"), Some(1_792_252_434));
+        assert_eq!(unix_seconds("2000-02-29T12:00:00+05:30"), Some(951_805_800));
+        assert!(unix_seconds("0001-01-01T00:00:00Z").unwrap() < 0);
+        assert_eq!(unix_seconds("yesterday"), None);
     }
 
     #[test]

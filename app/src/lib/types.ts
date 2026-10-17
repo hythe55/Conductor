@@ -52,6 +52,8 @@ export interface Device {
   /** For offline devices, when Tailscale last heard from them (ISO 8601). */
   lastSeen?: string
   host: HostInfo | null
+  /** Tailscale says it's online, but it hasn't answered over the tailnet lately, so it's likely asleep. */
+  silent?: boolean
   /** How to wake it, remembered from when it was last online. */
   wake?: WakeInfo
   isSelf: boolean
