@@ -5,7 +5,7 @@ Control your Windows PCs from your other devices, over your own [Tailscale](http
 - Full keyboard and mouse control, on every display, or on just one window
 - Works at the sign-in screen, the lock screen, and on UAC prompts
 - Hardware video encoding with low latency, and adapts to the connection
-- Sound from the PC you're controlling
+- Sound from the PC you're controlling, even while its own speakers are muted
 - Copy and paste text between PCs, and send or save files
 - A small picture of each PC's screen in the device list, which each PC can turn off
 - Shows who's in control on the PC's screen, or covers the screen and turns off its keyboard and mouse so nobody at the PC sees or gets in the way of what you're doing
@@ -66,7 +66,6 @@ The Android app also needs JDK 17 and the Android SDK and NDK, with `JAVA_HOME`,
 
 - Android app downloads (it builds from source today)
 - Virtual displays, sized to the device you're controlling from
-- Sound even when the PC's own speakers are muted
 
 ## License
 
