@@ -14,6 +14,8 @@
     onselectdisplay: (id: string) => void
     ontogglefullscreen: () => void
     ontogglestats: () => void
+    /** Opens the on-screen keyboard. Only given where there's no real one. */
+    onkeyboard?: () => void
     ondisconnect: () => void
   }
 
@@ -28,6 +30,7 @@
     onselectdisplay,
     ontogglefullscreen,
     ontogglestats,
+    onkeyboard,
     ondisconnect,
   }: Props = $props()
 
@@ -165,6 +168,12 @@
       {/if}
 
       <div class="group" role="group">
+        {#if onkeyboard}
+          <button class="item" role="menuitem" tabindex="-1" onclick={() => run(onkeyboard)}>
+            <span class="check"></span>
+            <span class="text">Keyboard</span>
+          </button>
+        {/if}
         {#if canFullscreen}
           <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ontogglefullscreen)}>
             <span class="check"></span>

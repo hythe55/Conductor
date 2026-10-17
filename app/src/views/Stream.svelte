@@ -3,14 +3,18 @@
   import { Problem } from '../lib/errors'
   import { attachDesktopInput } from '../lib/input'
   import { RemoteSession, type SessionState, type Stats } from '../lib/session'
+  import { attachTouchInput } from '../lib/touch'
   import type { DisplayInfo, HostInfo } from '../lib/types'
   import Handle from '../components/Handle.svelte'
+  import Keyboard from '../components/Keyboard.svelte'
   import ProblemText from '../components/ProblemText.svelte'
 
   let { url, info, onclose }: { url: string; info: HostInfo; onclose: () => void } = $props()
 
   let video: HTMLVideoElement
   let surface: HTMLDivElement
+  let pointer: HTMLDivElement
+  let keyboard: Keyboard
   // The view is created per connection, so the initial props are all it needs.
   const start = untrack(() => ({
     url,
@@ -27,6 +31,11 @@
   let showStats = $state(false)
   let stats = $state<Stats | null>(null)
   let fullscreen = $state(false)
+  let keyboardOpen = $state(false)
+  // Height of the part of the window the phone keyboard leaves uncovered.
+  let viewHeight = $state<number | null>(null)
+
+  const coarse = window.matchMedia('(pointer: coarse)').matches
 
   const dpr = window.devicePixelRatio || 1
   const session = new RemoteSession(
@@ -84,14 +93,29 @@
 
   // Typing goes back to the remote PC as soon as the menu closes.
   $effect(() => {
-    if (!panelOpen) surface?.focus()
+    if (!panelOpen && !keyboardOpen) surface?.focus()
   })
 
-  let detach: (() => void) | null = null
   $effect(() => {
-    detach = attachDesktopInput(surface, video, (m) => session.send(m), { localShortcut })
+    const send = (m: Parameters<typeof session.send>[0]) => session.send(m)
+    const detachDesktop = attachDesktopInput(surface, video, send, { localShortcut })
+    const detachTouch = attachTouchInput(surface, video, pointer, send, {
+      displayWidth: () => displays.find((d) => d.id === activeDisplay)?.width || video.videoWidth || 1920,
+    })
     surface.focus()
-    return () => detach?.()
+    return () => {
+      detachDesktop()
+      detachTouch()
+    }
+  })
+
+  $effect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const update = () => (viewHeight = window.innerHeight - vv.height > 1 ? vv.height : null)
+    update()
+    vv.addEventListener('resize', update)
+    return () => vv.removeEventListener('resize', update)
   })
 
   $effect(() => {
@@ -154,7 +178,7 @@
   )
 </script>
 
-<div class="stream">
+<div class="stream" style:height={viewHeight ? `${viewHeight}px` : null}>
   <!-- Focus stays here for the whole session, so it has no outline: one would frame the remote screen. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div class="surface" bind:this={surface} tabindex="0" role="application" aria-label="Screen of {info.name}">
@@ -169,6 +193,20 @@
       onloadeddata={() => (hasVideo = true)}
     ></video>
   </div>
+
+  <div class="pointer" bind:this={pointer} hidden aria-hidden="true">
+    <svg width="20" height="20" viewBox="0 0 20 20">
+      <path
+        d="M1.5 1.5v14.5l3.8-3.7 2.6 6.1 2.6-1.1-2.6-6h5.3z"
+        fill="#fff"
+        stroke="#000"
+        stroke-width="1.2"
+        stroke-linejoin="round"
+      />
+    </svg>
+  </div>
+
+  <Keyboard bind:this={keyboard} bind:open={keyboardOpen} send={(m) => session.send(m)} />
 
   {#if phase === 'failed'}
     <div class="notice" role="alert">
@@ -210,6 +248,7 @@
       onselectdisplay={selectDisplay}
       ontogglefullscreen={toggleFullscreen}
       ontogglestats={() => (showStats = !showStats)}
+      onkeyboard={coarse ? () => keyboard.show() : undefined}
       ondisconnect={disconnect}
     />
   {/if}
@@ -235,6 +274,18 @@
     inset: 0;
     outline: none;
     touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .pointer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    margin: -1.5px 0 0 -1.5px;
+    pointer-events: none;
   }
 
   video {
