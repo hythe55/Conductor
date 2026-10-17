@@ -131,10 +131,14 @@ fn reopen_marker() -> PathBuf {
     data_dir().join("reopen-app")
 }
 
-/// Runs when the service starts: removes old downloads and, right after an
-/// update, reopens the app wherever the installer closed it.
-pub fn after_start(app: PathBuf) {
+/// Removes downloaded installers.
+pub fn remove_downloads() {
     _ = fs::remove_dir_all(updates_dir());
+}
+
+/// Runs when the service starts: right after an update, reopens the app
+/// wherever the installer closed it.
+pub fn after_start(app: PathBuf) {
     let marker = reopen_marker();
     let Ok(meta) = fs::metadata(&marker) else { return };
     let recent = meta.modified().ok().and_then(|t| SystemTime::now().duration_since(t).ok()) < Some(REOPEN_WITHIN);

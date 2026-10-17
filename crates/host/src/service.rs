@@ -235,6 +235,11 @@ async fn keep_updated(sup: Arc<Mutex<Supervisor>>, mut requests: mpsc::Receiver<
         };
 
         if check {
+            if ready.is_none() {
+                // The last installer is usually still finishing when the new
+                // service starts, so its download is removed here instead.
+                update::remove_downloads();
+            }
             sup.lock().await.update = UpdateStatus::Checking;
             let result = tokio::task::spawn_blocking(update::fetch).await.unwrap_or_else(|e| Err(e.into()));
             next_check = Instant::now() + UPDATE_CHECK_EVERY;
