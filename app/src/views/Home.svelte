@@ -1,5 +1,7 @@
 <script lang="ts">
+  import ProblemText from '../components/ProblemText.svelte'
   import { deviceUrl } from '../lib/api'
+  import { type Problem, toProblem } from '../lib/errors'
   import { isDesktopApp, listDevices } from '../lib/platform'
   import type { Device, HostInfo } from '../lib/types'
 
@@ -9,7 +11,7 @@
   }: { onconnect: (t: { url: string; info: HostInfo }) => void; onsettings: () => void } = $props()
 
   let list = $state<Device[] | null>(null)
-  let error = $state<string | null>(null)
+  let error = $state<Problem | null>(null)
 
   async function load() {
     try {
@@ -17,11 +19,11 @@
       error = null
     } catch (e) {
       // Keep showing the last good list; only an empty screen needs the error.
-      if (!list) error = e instanceof Error ? e.message : String(e)
+      if (!list) error = toProblem(e, 'Couldn’t get the list of devices.')
     }
   }
 
-  // Refresh while the list is on screen so PCs that wake up or start
+  // Refresh while the list is on screen so devices that wake up or start
   // Conductor appear on their own. Nothing is polled while hidden.
   $effect(() => {
     load()
@@ -59,8 +61,30 @@
       case 'not-running':
         return 'Conductor isn’t running'
       case 'offline':
-        return 'Offline'
+        return d.lastSeen ? `Offline, last seen ${ago(d.lastSeen)}` : 'Offline'
     }
+  }
+
+  const relative = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+
+  function ago(iso: string) {
+    const seconds = (Date.parse(iso) - Date.now()) / 1000
+    if (!Number.isFinite(seconds) || seconds > -60) return 'just now'
+    const units: [Intl.RelativeTimeFormatUnit, number][] = [
+      ['minute', 60],
+      ['hour', 60],
+      ['day', 24],
+      ['week', 7],
+      ['month', 4.35],
+      ['year', 12],
+    ]
+    let value = seconds / 60
+    let unit: Intl.RelativeTimeFormatUnit = 'minute'
+    for (let i = 1; i < units.length && Math.abs(value) >= units[i][1]; i++) {
+      value /= units[i][1]
+      unit = units[i][0]
+    }
+    return relative.format(Math.round(value), unit)
   }
 </script>
 
@@ -74,15 +98,18 @@
 
   {#if error}
     <div class="problem" role="alert">
-      <p>{error}</p>
+      <ProblemText problem={error} />
       <button class="btn" onclick={retry}>Try again</button>
     </div>
   {:else if list === null}
     <p class="quiet">Looking for your devices…</p>
   {:else if list.length === 0}
-    <p class="quiet">
-      No other PCs found. Install Conductor on a Windows PC that’s signed in to the same Tailscale account.
-    </p>
+    <div class="problem">
+      <p class="quiet">
+        No other devices found. Install Conductor on a Windows PC that’s signed in to the same Tailscale account.
+      </p>
+      <button class="btn" onclick={retry}>Check again</button>
+    </div>
   {:else}
     <ul class="devices">
       {#each list as d (d.id)}
@@ -94,7 +121,11 @@
             <span class="meta">{describe(d)}</span>
           </div>
           {#if s === 'ready'}
-            <button class="btn primary" onclick={() => onconnect({ url: deviceUrl(d), info: d.host! })}>
+            <button
+              class="btn primary"
+              aria-label="Connect to {d.name}"
+              onclick={() => onconnect({ url: deviceUrl(d), info: d.host! })}
+            >
               Connect
             </button>
           {/if}
@@ -106,37 +137,22 @@
 
 <style>
   main {
-    max-width: 760px;
-    margin: 0 auto;
-    padding: var(--space-8) var(--space-6);
-    padding-top: max(var(--space-8), env(safe-area-inset-top));
+    padding: var(--space-6);
+    padding-top: max(var(--space-6), env(safe-area-inset-top));
   }
 
   header {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
-    margin-bottom: var(--space-4);
+    margin-bottom: var(--space-2);
   }
 
   h1 {
     margin: 0;
-    font-family: var(--font-display);
-    font-size: 15px;
+    font-size: var(--text-md);
     font-weight: 600;
     color: var(--text-muted);
-  }
-
-  .link {
-    padding: var(--space-1) 0;
-    border: 0;
-    background: none;
-    color: var(--text-muted);
-    cursor: pointer;
-  }
-
-  .link:hover {
-    color: var(--text);
   }
 
   .quiet {
@@ -157,7 +173,7 @@
     grid-template-columns: auto 1fr auto;
     align-items: center;
     gap: var(--space-4);
-    min-height: 76px;
+    min-height: 64px;
     padding: var(--space-3) 0;
     border-bottom: 1px solid var(--border);
   }
@@ -186,10 +202,9 @@
 
   .name {
     font-family: var(--font-display);
-    font-size: 26px;
+    font-size: var(--text-lg);
     font-weight: 600;
-    line-height: 1.15;
-    letter-spacing: -0.01em;
+    line-height: 1.25;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -201,6 +216,7 @@
   }
 
   .meta {
+    font-size: var(--text-sm);
     color: var(--text-muted);
   }
 
@@ -219,10 +235,6 @@
   @media (max-width: 480px) {
     main {
       padding-inline: var(--space-4);
-    }
-
-    .name {
-      font-size: 22px;
     }
   }
 </style>

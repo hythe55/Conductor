@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { devices as fetchDevices } from './api'
+import { toProblem } from './errors'
 import type { ControlStatus, Device } from './types'
 
 /** Running inside the Conductor app rather than a browser. */
@@ -11,7 +12,7 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
   try {
     return await invoke<T>(cmd, args)
   } catch (e) {
-    throw new Error(typeof e === 'string' ? e : e instanceof Error ? e.message : String(e))
+    throw toProblem(e, 'Something went wrong inside Conductor. Restart the app and try again.')
   }
 }
 

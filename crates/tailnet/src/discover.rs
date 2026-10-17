@@ -44,6 +44,7 @@ pub async fn discover(status: &Status, requester: Option<IpAddr>) -> Vec<Device>
             address: ip.map(|ip| ip.to_string()).unwrap_or_default(),
             os: node.os.clone(),
             online: node.online || is_self,
+            last_seen: if node.online || is_self { None } else { node.last_seen().map(str::to_string) },
             host,
             is_self,
             is_you: requester.is_some_and(|r| node.tailscale_ips.contains(&r)),

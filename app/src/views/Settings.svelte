@@ -1,6 +1,9 @@
 <script lang="ts">
   import { getVersion } from '@tauri-apps/api/app'
+  import Icon from '../components/Icon.svelte'
+  import ProblemText from '../components/ProblemText.svelte'
   import Switch from '../components/Switch.svelte'
+  import { type Problem, toProblem } from '../lib/errors'
   import { hostStatus, setHosting } from '../lib/platform'
   import type { ControlStatus } from '../lib/types'
 
@@ -9,7 +12,7 @@
   let status = $state<ControlStatus | null>(null)
   let loaded = $state(false)
   let busy = $state(false)
-  let error = $state<string | null>(null)
+  let error = $state<Problem | null>(null)
   let version = $state('')
 
   async function refresh() {
@@ -17,7 +20,7 @@
       status = await hostStatus()
       error = null
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e)
+      error = toProblem(e, 'Couldn’t check whether this PC can be controlled.')
     }
     loaded = true
   }
@@ -25,9 +28,19 @@
   $effect(() => {
     refresh()
     getVersion().then((v) => (version = v)).catch(() => {})
-    // The agent takes a moment to start after hosting is turned on.
-    const timer = window.setInterval(refresh, 3000)
-    return () => clearInterval(timer)
+    // The agent takes a moment to start after hosting is turned on. Nothing is polled while hidden.
+    let timer = window.setInterval(refresh, 3000)
+    const onVisibility = () => {
+      clearInterval(timer)
+      if (document.hidden) return
+      refresh()
+      timer = window.setInterval(refresh, 3000)
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   })
 
   async function toggle(enabled: boolean) {
@@ -36,7 +49,7 @@
     try {
       status = await setHosting(enabled)
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e)
+      error = toProblem(e, enabled ? 'Couldn’t turn this on.' : 'Couldn’t turn this off.')
     }
     busy = false
   }
@@ -51,7 +64,7 @@
 </script>
 
 <main>
-  <button class="back" onclick={onback}>Devices</button>
+  <button class="link" aria-label="Back to devices" onclick={onback}><Icon name="back" />Devices</button>
   <h1>Settings</h1>
 
   <section aria-labelledby="this-pc">
@@ -61,7 +74,7 @@
         <div class="text">
           <span class="label" id="hosting-label">Let my other devices control this PC</span>
           <span class="note">{hostingNote}</span>
-          {#if error}<span class="note error" role="alert">{error}</span>{/if}
+          {#if error}<div class="note error" role="alert"><ProblemText problem={error} /></div>{/if}
         </div>
         <Switch
           checked={status?.hosting ?? false}
@@ -88,55 +101,30 @@
 
 <style>
   main {
-    max-width: 760px;
-    margin: 0 auto;
     padding: var(--space-6);
     padding-top: max(var(--space-6), env(safe-area-inset-top));
-  }
-
-  .back {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    padding: var(--space-1) 0;
-    border: 0;
-    background: none;
-    color: var(--text-muted);
-    cursor: pointer;
-  }
-
-  .back::before {
-    content: '‹';
-    font-size: 18px;
-    line-height: 1;
-  }
-
-  .back:hover {
-    color: var(--text);
   }
 
   h1 {
     margin: var(--space-2) 0 var(--space-6);
     font-family: var(--font-display);
-    font-size: 26px;
+    font-size: var(--text-lg);
     font-weight: 600;
-    letter-spacing: -0.01em;
   }
 
   section + section {
-    margin-top: var(--space-6);
+    margin-top: var(--space-8);
   }
 
   h2 {
     margin: 0 0 var(--space-2);
-    font-size: 14px;
+    font-size: var(--text-md);
     font-weight: 600;
+    color: var(--text-muted);
   }
 
   .group {
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface);
+    border-top: 1px solid var(--border);
   }
 
   .row {
@@ -144,7 +132,8 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-4);
-    padding: var(--space-4);
+    padding: var(--space-3) 0;
+    border-bottom: 1px solid var(--border);
   }
 
   .text {
@@ -155,9 +144,9 @@
   }
 
   .note {
-    max-width: 60ch;
+    max-width: 72ch;
     color: var(--text-muted);
-    font-size: 13px;
+    font-size: var(--text-sm);
   }
 
   .note.error {

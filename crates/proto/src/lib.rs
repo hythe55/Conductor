@@ -74,6 +74,9 @@ pub struct Device {
     pub os: String,
     /// Tailscale sees the machine as connected.
     pub online: bool,
+    /// For offline machines, when Tailscale last heard from them (RFC 3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen: Option<String>,
     /// Present when Conductor is running there and answered.
     pub host: Option<HostInfo>,
     /// The machine that produced this list.

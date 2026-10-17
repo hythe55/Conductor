@@ -3,17 +3,37 @@
 use std::time::Duration;
 
 use conductor_proto::{CONTROL_PIPE, ControlRequest, ControlStatus, Device};
+use serde::Serialize;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::windows::named_pipe::ClientOptions;
 
+/// An error for people: a plain message, plus the raw cause behind "Details".
+#[derive(Debug, Serialize)]
+pub struct Problem {
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<String>,
+}
+
+impl Problem {
+    fn new(message: &str, details: impl ToString) -> Self {
+        Self { message: message.into(), details: Some(details.to_string()) }
+    }
+}
+
+const NO_SERVICE: &str = "Couldn't reach the Conductor service on this PC. Restart the PC, or reinstall Conductor.";
+
 /// The owner's PCs on the tailnet, with this one marked as "you".
 #[tauri::command]
-pub async fn devices() -> Result<Vec<Device>, String> {
-    let status = conductor_tailnet::status().await.map_err(|_| {
-        "Tailscale isn't running on this PC. Open Tailscale and sign in, then try again.".to_string()
-    })?;
+pub async fn devices() -> Result<Vec<Device>, Problem> {
+    let status = conductor_tailnet::status()
+        .await
+        .map_err(|e| Problem::new("Tailscale isn't running on this PC. Open Tailscale and sign in.", format!("{e:#}")))?;
     if !status.is_running() {
-        return Err("Tailscale isn't connected. Open Tailscale and sign in, then try again.".into());
+        return Err(Problem::new(
+            "Tailscale isn't connected on this PC. Open Tailscale and sign in.",
+            format!("Tailscale state: {}", status.backend_state),
+        ));
     }
     let mut list = conductor_tailnet::discover(&status, None).await;
     for d in &mut list {
@@ -25,21 +45,21 @@ pub async fn devices() -> Result<Vec<Device>, String> {
 /// Hosting state from the Conductor service, or `None` when the service
 /// isn't installed (e.g. running a development build).
 #[tauri::command]
-pub async fn host_status() -> Result<Option<ControlStatus>, String> {
+pub async fn host_status() -> Result<Option<ControlStatus>, Problem> {
     match call(&ControlRequest::Status).await {
         Ok(s) => Ok(Some(s)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("Couldn't reach the Conductor service: {e}")),
+        Err(e) => Err(Problem::new(NO_SERVICE, e)),
     }
 }
 
 #[tauri::command]
-pub async fn set_hosting(enabled: bool) -> Result<ControlStatus, String> {
+pub async fn set_hosting(enabled: bool) -> Result<ControlStatus, Problem> {
     call(&ControlRequest::SetHosting { enabled }).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            "The Conductor service isn't installed. Reinstall Conductor to turn this on.".into()
+            Problem::new("The Conductor service isn't installed. Reinstall Conductor to turn this on.", e)
         } else {
-            format!("Couldn't reach the Conductor service: {e}")
+            Problem::new(NO_SERVICE, e)
         }
     })
 }

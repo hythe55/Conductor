@@ -1,9 +1,11 @@
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte'
+  import { Problem } from '../lib/errors'
   import { attachDesktopInput } from '../lib/input'
   import { RemoteSession, type SessionState, type Stats } from '../lib/session'
   import type { DisplayInfo, HostInfo } from '../lib/types'
   import Handle from '../components/Handle.svelte'
+  import ProblemText from '../components/ProblemText.svelte'
 
   let { url, info, onclose }: { url: string; info: HostInfo; onclose: () => void } = $props()
 
@@ -17,7 +19,7 @@
   }))
 
   let phase = $state<SessionState>('connecting')
-  let error = $state<string | null>(null)
+  let error = $state<Problem | null>(null)
   let hasVideo = $state(false)
   let displays = $state<DisplayInfo[]>(start.displays)
   let activeDisplay = $state<string>(start.display)
@@ -49,7 +51,7 @@
           activeDisplay = msg.active
           session.options.display = msg.active
         } else if (msg.t === 'error') {
-          error = msg.message
+          error = new Problem(`Couldn’t show the screen of ${info.name}. Try another display, or reconnect.`, msg.message)
         }
       },
     },
@@ -61,7 +63,14 @@
   }
 
   function localShortcut(e: KeyboardEvent): boolean {
-    if (panelOpen) return true
+    // Keys reach the remote PC only while its screen has focus; menus and buttons keep theirs.
+    if (e.target !== surface) {
+      if (panelOpen && e.type === 'keydown' && chord(e, 'KeyM')) {
+        e.preventDefault()
+        panelOpen = false
+      }
+      return true
+    }
     if (e.type !== 'keydown') return chord(e, e.code) && ['KeyM', 'KeyS', 'KeyQ', 'KeyF'].includes(e.code)
     if (chord(e, 'KeyM')) panelOpen = !panelOpen
     else if (chord(e, 'KeyS')) showStats = !showStats
@@ -72,6 +81,11 @@
     session.send({ t: 'releaseAll' })
     return true
   }
+
+  // Typing goes back to the remote PC as soon as the menu closes.
+  $effect(() => {
+    if (!panelOpen) surface?.focus()
+  })
 
   let detach: (() => void) | null = null
   $effect(() => {
@@ -141,8 +155,9 @@
 </script>
 
 <div class="stream">
+  <!-- Focus stays here for the whole session, so it has no outline: one would frame the remote screen. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <div class="surface" bind:this={surface} tabindex="0" aria-label="Remote screen of {info.name}">
+  <div class="surface" bind:this={surface} tabindex="0" role="application" aria-label="Screen of {info.name}">
     <!-- svelte-ignore a11y_media_has_caption -->
     <video
       bind:this={video}
@@ -157,15 +172,19 @@
 
   {#if phase === 'failed'}
     <div class="notice" role="alert">
-      <p>{error ?? `Lost the connection to ${info.name}.`}</p>
+      <ProblemText problem={error ?? new Problem(`Lost the connection to ${info.name}.`)} />
       <div class="actions">
         <button class="btn primary" onclick={retry}>Try again</button>
         <button class="btn" onclick={onclose}>Back to devices</button>
       </div>
     </div>
+  {:else if error && !hasVideo}
+    <div class="notice" role="alert">
+      <ProblemText problem={error} />
+    </div>
   {:else if !hasVideo}
     <div class="notice quiet" aria-live="polite">
-      <p>{error ?? `Connecting to ${info.name}…`}</p>
+      <p>Connecting to {info.name}…</p>
     </div>
   {/if}
 
@@ -200,8 +219,14 @@
   .stream {
     position: fixed;
     inset: 0;
-    background: #000;
+    background: var(--stream-bg);
     color: var(--overlay-text);
+    /* The session view is always dark, so it uses the dark-theme accent. */
+    --accent: var(--overlay-accent);
+    --accent-hover: var(--overlay-accent-hover);
+    --accent-text: var(--overlay-accent-text);
+    --focus: var(--overlay-accent);
+    --details-color: var(--overlay-muted);
     overflow: hidden;
   }
 
@@ -236,10 +261,9 @@
     text-align: center;
   }
 
-  .notice p {
+  .notice :global(p) {
     margin: 0;
     max-width: 48ch;
-    font-size: 15px;
   }
 
   .notice.quiet {
@@ -256,8 +280,12 @@
 
   .actions .btn:not(.primary) {
     background: transparent;
-    border-color: #4a4a4a;
+    border-color: var(--overlay-border-strong);
     color: var(--overlay-text);
+  }
+
+  .actions .btn:not(.primary):hover {
+    background: var(--overlay-hover);
   }
 
   .stats {
@@ -269,7 +297,7 @@
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-sm);
     background: var(--overlay-bg);
-    font-size: 12px;
+    font-size: var(--text-sm);
     font-variant-numeric: tabular-nums;
     pointer-events: none;
   }

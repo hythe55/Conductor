@@ -1,4 +1,5 @@
 import { createSession, type HostUrl, type SessionOptions } from './api'
+import { Problem, toProblem } from './errors'
 import type { ClientMsg, HostMsg } from './types'
 
 export type SessionState = 'connecting' | 'connected' | 'reconnecting' | 'failed' | 'closed'
@@ -15,7 +16,7 @@ export interface Stats {
 }
 
 export interface SessionHandlers {
-  onState(state: SessionState, error?: string): void
+  onState(state: SessionState, problem?: Problem): void
   onStream(stream: MediaStream): void
   onMessage(msg: HostMsg): void
 }
@@ -114,7 +115,7 @@ export class RemoteSession {
     } catch (e) {
       if (this.pc !== pc) return
       if (this.attempt === 0) {
-        this.handlers.onState('failed', e instanceof Error ? e.message : String(e))
+        this.handlers.onState('failed', toProblem(e, 'Couldn’t start the connection. Try again.'))
         this.teardown()
       } else {
         this.retry()
@@ -126,7 +127,7 @@ export class RemoteSession {
     if (this.closed) return
     if (this.attempt >= RECONNECT_DELAYS.length) {
       this.teardown()
-      this.handlers.onState('failed', 'Lost the connection and couldn’t get it back.')
+      this.handlers.onState('failed', new Problem('Lost the connection and couldn’t get it back.'))
       return
     }
     const delay = RECONNECT_DELAYS[this.attempt++]

@@ -67,7 +67,7 @@
     .switch::after {
       content: '';
       position: absolute;
-      inset: -12px;
+      inset: -14px;
     }
   }
 

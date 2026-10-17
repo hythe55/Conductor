@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { tick } from 'svelte'
+  import Icon from './Icon.svelte'
   import type { DisplayInfo } from '../lib/types'
 
   interface Props {
@@ -32,6 +34,8 @@
   const coarse = window.matchMedia('(pointer: coarse)').matches
   const canFullscreen = document.fullscreenEnabled
 
+  let panel = $state<HTMLDivElement>()
+
   // The handle fades out while you work and comes back when the pointer nears the top edge.
   let awake = $state(true)
   let timer: number | undefined
@@ -54,17 +58,48 @@
     }
   })
 
+  // Show the handle for a moment when the connection gets slow, so the chip is seen.
   $effect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+    if (quality === 'poor') wake()
+  })
+
+  // Focus moves into the menu when it opens. The session view takes it back when the menu closes.
+  $effect(() => {
+    if (open) tick().then(() => items()[0]?.focus())
+  })
+
+  function items(): HTMLElement[] {
+    return panel ? Array.from(panel.querySelectorAll<HTMLElement>('[role^="menuitem"]')) : []
+  }
+
+  function onPanelKey(e: KeyboardEvent) {
+    const list = items()
+    const at = list.indexOf(document.activeElement as HTMLElement)
+    let next: number
+    switch (e.key) {
+      case 'ArrowDown':
+        next = (at + 1) % list.length
+        break
+      case 'ArrowUp':
+        next = (at - 1 + list.length) % list.length
+        break
+      case 'Home':
+        next = 0
+        break
+      case 'End':
+        next = list.length - 1
+        break
+      case 'Escape':
+      case 'Tab':
         e.preventDefault()
         open = false
-      }
+        return
+      default:
+        return
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  })
+    e.preventDefault()
+    list[next]?.focus()
+  }
 
   function run(action: () => void) {
     open = false
@@ -75,6 +110,8 @@
     const name = d.name || `Display ${index + 1}`
     return `${name}, ${d.width}×${d.height}`
   }
+
+  const chip = $derived(reconnecting ? 'Reconnecting…' : quality === 'poor' ? 'Slow connection' : null)
 </script>
 
 {#if open}
@@ -88,20 +125,28 @@
     class:open
     aria-expanded={open}
     aria-haspopup="menu"
-    aria-label={reconnecting ? 'Reconnecting. Open session menu' : 'Open session menu'}
+    aria-label={chip ? `${chip} Session menu` : 'Session menu'}
+    title={coarse ? undefined : 'Session menu (Ctrl+Alt+Shift+M)'}
     onclick={() => (open = !open)}
     onfocus={wake}
   >
-    {#if reconnecting}
-      <span class="label">Reconnecting…</span>
+    {#if chip}
+      <span class="chip">{chip}</span>
     {:else}
       <span class="grip" aria-hidden="true"></span>
-      {#if quality !== 'good'}<span class="dot {quality}" aria-hidden="true"></span>{/if}
     {/if}
   </button>
 
   {#if open}
-    <div class="panel" class:checks={displays.length > 1} role="menu">
+    <!-- svelte-ignore a11y_interactive_supports_focus -->
+    <div
+      bind:this={panel}
+      class="panel"
+      class:checks={displays.length > 1}
+      role="menu"
+      aria-label="Session"
+      onkeydown={onPanelKey}
+    >
       {#if displays.length > 1}
         <div class="group" role="group" aria-label="Display">
           {#each displays as d, i (d.id)}
@@ -109,41 +154,38 @@
               class="item"
               role="menuitemradio"
               aria-checked={d.id === activeDisplay}
+              tabindex="-1"
               onclick={() => run(() => onselectdisplay(d.id))}
             >
-              <span class="check" aria-hidden="true">{d.id === activeDisplay ? '✓' : ''}</span>
+              <span class="check">{#if d.id === activeDisplay}<Icon name="check" />{/if}</span>
               <span class="text">{displayLabel(d, i)}</span>
             </button>
           {/each}
         </div>
       {/if}
 
-      <div class="group">
+      <div class="group" role="group">
         {#if canFullscreen}
-          <button class="item" role="menuitem" onclick={() => run(ontogglefullscreen)}>
-            <span class="check" aria-hidden="true"></span>
+          <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ontogglefullscreen)}>
+            <span class="check"></span>
             <span class="text">{fullscreen ? 'Exit full screen' : 'Full screen'}</span>
             {#if !coarse}<kbd>Ctrl+Alt+Shift+F</kbd>{/if}
           </button>
         {/if}
-        <button class="item" role="menuitem" onclick={() => run(ontogglestats)}>
-          <span class="check" aria-hidden="true"></span>
+        <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ontogglestats)}>
+          <span class="check"></span>
           <span class="text">{showStats ? 'Hide connection details' : 'Show connection details'}</span>
           {#if !coarse}<kbd>Ctrl+Alt+Shift+S</kbd>{/if}
         </button>
       </div>
 
-      <div class="group">
-        <button class="item" role="menuitem" onclick={() => run(ondisconnect)}>
-          <span class="check" aria-hidden="true"></span>
+      <div class="group" role="group">
+        <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ondisconnect)}>
+          <span class="check"></span>
           <span class="text">Disconnect</span>
           {#if !coarse}<kbd>Ctrl+Alt+Shift+Q</kbd>{/if}
         </button>
       </div>
-
-      {#if !coarse}
-        <p class="hint">Ctrl+Alt+Shift+M opens this menu.</p>
-      {/if}
     </div>
   {/if}
 </div>
@@ -173,10 +215,10 @@
   }
 
   .handle {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: var(--space-2);
     min-width: 64px;
     height: 22px;
     padding: 0 var(--space-3);
@@ -189,7 +231,7 @@
 
   .handle:hover,
   .handle.open {
-    background: rgb(48 48 48 / 95%);
+    background: var(--overlay-bg-hover);
   }
 
   .grip {
@@ -199,22 +241,9 @@
     background: var(--overlay-muted);
   }
 
-  .dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-  }
-
-  .dot.poor {
-    background: var(--status-asleep);
-  }
-
-  .dot.bad {
-    background: var(--status-error);
-  }
-
-  .label {
-    font-size: 12px;
+  .chip {
+    font-size: var(--text-sm);
+    color: var(--overlay-warning);
   }
 
   .panel {
@@ -222,16 +251,16 @@
     min-width: 260px;
     max-width: calc(100vw - 2 * var(--space-4));
     padding: var(--space-1);
+    border: 1px solid var(--overlay-border);
     border-radius: var(--radius);
     background: var(--overlay-solid);
     color: var(--overlay-text);
-    box-shadow: 0 8px 24px rgb(0 0 0 / 40%);
   }
 
   .group + .group {
     margin-top: var(--space-1);
     padding-top: var(--space-1);
-    border-top: 1px solid rgb(255 255 255 / 10%);
+    border-top: 1px solid var(--overlay-border);
   }
 
   .item {
@@ -252,7 +281,11 @@
 
   .item:hover,
   .item:focus-visible {
-    background: rgb(255 255 255 / 8%);
+    background: var(--overlay-hover);
+  }
+
+  .item:focus-visible {
+    outline-offset: -2px;
   }
 
   .panel.checks .item {
@@ -264,8 +297,7 @@
   }
 
   .check {
-    font-size: 12px;
-    color: var(--accent);
+    color: var(--overlay-accent);
   }
 
   .text {
@@ -276,15 +308,7 @@
 
   kbd {
     font: inherit;
-    font-size: 12px;
-    color: var(--overlay-muted);
-  }
-
-  .hint {
-    margin: var(--space-1) 0 0;
-    padding: var(--space-2) var(--space-3) var(--space-1);
-    border-top: 1px solid rgb(255 255 255 / 10%);
-    font-size: 12px;
+    font-size: var(--text-sm);
     color: var(--overlay-muted);
   }
 
@@ -294,8 +318,15 @@
       min-width: 80px;
     }
 
+    /* A finger-sized target without a bigger handle over the remote screen. */
+    .handle::after {
+      content: '';
+      position: absolute;
+      inset: -8px -16px -20px;
+    }
+
     .item {
-      min-height: 44px;
+      min-height: var(--touch-target);
     }
   }
 

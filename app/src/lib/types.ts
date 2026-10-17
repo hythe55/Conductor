@@ -26,6 +26,8 @@ export interface Device {
   address: string
   os: string
   online: boolean
+  /** For offline devices, when Tailscale last heard from them (ISO 8601). */
+  lastSeen?: string
   host: HostInfo | null
   isSelf: boolean
   isYou: boolean

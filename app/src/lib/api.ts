@@ -1,3 +1,4 @@
+import { Problem } from './errors'
 import type { Device, HostInfo } from './types'
 
 /** Base URL of a host's API. Empty string means the host serving this page. */
@@ -7,11 +8,20 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   let res: Response
   try {
     res = await fetch(url, { ...init, signal: init?.signal ?? AbortSignal.timeout(8000) })
-  } catch {
-    throw new Error("Couldn't reach this PC. It may be off, asleep, or not on your tailnet.")
+  } catch (e) {
+    throw new Problem(
+      "Couldn't reach this PC. It may be off, asleep, or not on your tailnet.",
+      e instanceof Error ? e.message : String(e),
+    )
   }
-  if (res.status === 403) throw new Error("This device isn't allowed to connect to that PC.")
-  if (!res.ok) throw new Error((await res.text()) || `Request failed (${res.status})`)
+  const detail = async () => `${res.status} ${res.statusText}: ${(await res.text().catch(() => '')).trim()}`
+  if (res.status === 403) {
+    throw new Problem(
+      "This device isn't allowed to control that PC. Both need to be signed in to the same Tailscale account.",
+      await detail(),
+    )
+  }
+  if (!res.ok) throw new Problem("That PC couldn't handle the request. Try again, or restart it.", await detail())
   return res.json() as Promise<T>
 }
 

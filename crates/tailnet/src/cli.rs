@@ -70,6 +70,10 @@ pub struct Node {
     pub tailscale_ips: Vec<IpAddr>,
     #[serde(default)]
     pub online: bool,
+    /// When the coordination server last heard from an offline machine
+    /// (RFC 3339). Tailscale reports year 1 for machines that are online.
+    #[serde(default)]
+    pub last_seen: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -119,6 +123,11 @@ impl Node {
     /// MagicDNS name without the trailing dot.
     pub fn fqdn(&self) -> &str {
         self.dns_name.trim_end_matches('.')
+    }
+
+    /// `last_seen`, unless it's Tailscale's zero time.
+    pub fn last_seen(&self) -> Option<&str> {
+        self.last_seen.as_deref().filter(|t| !t.starts_with("0001-"))
     }
 
     /// Short machine name as MagicDNS resolves it (lowercase, first label).

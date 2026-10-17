@@ -18,10 +18,25 @@
   --status-offline: #858585;
   --status-error: #b83a25;
 
+  /* Session view: always dark, whatever the system theme. */
+  --stream-bg: #000000;
   --overlay-bg: rgb(32 32 32 / 92%);
+  --overlay-bg-hover: rgb(48 48 48 / 92%);
   --overlay-solid: #262626;
+  --overlay-hover: rgb(255 255 255 / 8%);
+  --overlay-border: rgb(255 255 255 / 10%);
+  --overlay-border-strong: rgb(255 255 255 / 25%);
   --overlay-text: #f2f2f2;
   --overlay-muted: #b0b0b0;
+  --overlay-accent: #4cc2ae;
+  --overlay-accent-hover: #68d0bd;
+  --overlay-accent-text: #062520;
+  --overlay-warning: #e0a64a;
+
+  --text-sm: 12px;
+  --text-md: 14px;
+  --text-lg: 20px;
+  --touch-target: 48px;
 
   --radius-sm: 6px;
   --radius: 10px;
@@ -68,7 +83,7 @@ body {
 
 body {
   font-family: var(--font);
-  font-size: 14px;
+  font-size: var(--text-md);
   line-height: 1.45;
   color: var(--text);
   background: var(--bg);
@@ -120,6 +135,29 @@ button {
 
 @media (pointer: coarse) {
   .btn {
-    min-height: 44px;
+    min-height: var(--touch-target);
+  }
+}
+
+/* Text-style button used for navigation (Settings, back). */
+.link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.link:hover {
+  color: var(--text);
+}
+
+@media (pointer: coarse) {
+  .link {
+    min-height: var(--touch-target);
   }
 }
