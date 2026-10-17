@@ -15,6 +15,8 @@
   let last = FILLER
   let composing = false
   let held = $state<Set<string>>(new Set())
+  // Keys from a real keyboard that went down on the remote PC and haven't come up yet.
+  const down = new Set<string>()
 
   /** Opens the phone keyboard. Call it from a tap, or the phone won't show it. */
   export function show() {
@@ -91,7 +93,11 @@
     const now = box.value
     let same = 0
     while (same < last.length && same < now.length && last[same] === now[same]) same++
-    for (let n = last.length - same; n > 0; n--) tap('Backspace')
+    // Don't split an emoji or other character made of two UTF-16 units.
+    const unit = last.charCodeAt(same - 1)
+    if (same > 0 && unit >= 0xd800 && unit <= 0xdbff) same--
+    // One Backspace per character removed.
+    for (let n = [...last.slice(same)].length; n > 0; n--) tap('Backspace')
     type(now.slice(same))
     last = now
     if (!composing && (now.length < FILLER.length || now.includes('\n') || now.length > 200)) reset()
@@ -101,10 +107,23 @@
     // Phone keyboards report most keys as "Unidentified" and type through onInput.
     // Keys from a real keyboard that don't type text are sent as they are.
     if (e.isComposing || e.key === 'Unidentified' || !e.code) return
-    const typesText = e.key.length === 1 || e.key === 'Backspace' || e.key === 'Enter'
-    if (typesText && !e.ctrlKey && !e.altKey && !e.metaKey) return
+    if (e.type === 'keyup') {
+      // Whatever went down comes up, even if Ctrl was let go first.
+      if (!down.delete(e.code)) return
+    } else {
+      const typesText = e.key.length === 1 || e.key === 'Backspace' || e.key === 'Enter'
+      if (typesText && !e.ctrlKey && !e.altKey && !e.metaKey) return
+      down.add(e.code)
+    }
     e.preventDefault()
     send({ t: 'key', code: e.code, down: e.type === 'keydown' })
+  }
+
+  function onBlur() {
+    open = false
+    held = new Set()
+    for (const code of down) send({ t: 'key', code, down: false })
+    down.clear()
   }
 
   // The keyboard can be dismissed with the phone's own controls; notice when it goes.
@@ -157,10 +176,7 @@
     composing = false
     onInput()
   }}
-  onblur={() => {
-    open = false
-    held = new Set()
-  }}
+  onblur={onBlur}
 ></textarea>
 
 {#if open}
@@ -199,6 +215,8 @@
     height: 1px;
     padding: 0;
     border: 0;
+    /* Smaller text makes iPhones zoom the page when the box gets focus. */
+    font-size: 16px;
     opacity: 0;
     resize: none;
     pointer-events: none;
@@ -221,7 +239,7 @@
   .key {
     flex: 1 1 0;
     min-width: 0;
-    height: 44px;
+    height: var(--touch-target);
     padding: 0 var(--space-2);
     border: 0;
     border-radius: var(--radius-sm);
@@ -232,7 +250,7 @@
   }
 
   .key[aria-pressed='true'] {
-    background: var(--overlay-accent);
-    color: var(--overlay-accent-text);
+    background: var(--overlay-text);
+    color: var(--stream-bg);
   }
 </style>

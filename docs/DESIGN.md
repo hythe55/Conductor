@@ -16,7 +16,7 @@ Conductor should feel like a well-made native utility: quiet, fast, obvious. Eve
 
 **Dashboard.** A list of your devices: name, state, last seen, a small thumbnail when online. One primary action per row (Connect or Wake). Power, transfer and settings live in a row menu. Empty state is one sentence and one button.
 
-**Session view.** Video edge to edge. One small handle (draggable, hideable, recalled with a shortcut or a touch gesture) opens a compact panel: displays, keyboard, clipboard/files, quality, disconnect. Stats overlay is off by default. No toasts over the stream; transient status (reconnecting, relayed) appears as a small inline chip on the handle.
+**Session view.** Video edge to edge. One small handle (draggable, hideable, recalled with a shortcut or a touch gesture) opens a compact panel: displays, keyboard, clipboard/files, quality, disconnect. Stats overlay is off by default. No toasts over the stream; transient status (reconnecting, relayed) appears as a small inline chip on the handle. On touch screens, where there's no hover to bring it back, the handle dims instead of hiding. The stream surface itself takes keyboard focus without a focus ring: it fills the window, every key goes to the remote PC, and a ring around the whole picture would cover its edges.
 
 **Settings.** Grouped list, one setting per row, a one-line description only where the label is not self-explanatory. No nested cards.
 

@@ -81,6 +81,8 @@
       },
       onMessage(msg) {
         if (msg.t === 'displays') {
+          // The picture is back, so whatever went wrong with it is over.
+          if (hasVideo) error = null
           displays = msg.displays
           activeDisplay = msg.active
           session.options.display = msg.active
@@ -283,6 +285,7 @@
       bind:open={panelOpen}
       {quality}
       reconnecting={phase === 'reconnecting'}
+      problem={hasVideo ? error : null}
       {displays}
       {activeDisplay}
       {fullscreen}

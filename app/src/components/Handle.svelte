@@ -1,12 +1,16 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import Icon from './Icon.svelte'
+  import ProblemText from './ProblemText.svelte'
+  import type { Problem } from '../lib/errors'
   import type { DisplayInfo } from '../lib/types'
 
   interface Props {
     open: boolean
     quality: 'good' | 'poor' | 'bad'
     reconnecting: boolean
+    /** Something wrong with the picture, explained at the top of the menu. */
+    problem: Problem | null
     displays: DisplayInfo[]
     activeDisplay: string
     fullscreen: boolean
@@ -23,6 +27,7 @@
     open = $bindable(false),
     quality,
     reconnecting,
+    problem,
     displays,
     activeDisplay,
     fullscreen,
@@ -38,6 +43,70 @@
   const canFullscreen = document.fullscreenEnabled
 
   let panel = $state<HTMLDivElement>()
+  let panelWidth = $state(0)
+  let handleWidth = $state(0)
+  let windowWidth = $state(window.innerWidth)
+
+  // Where the handle sits along the top edge, as a share of the width. It can be
+  // dragged aside when it covers something, and stays there next time.
+  const PLACE_KEY = 'conductor.handle'
+  let place = $state(savedPlace())
+  let drag: { id: number; startX: number; start: number; moved: boolean } | null = null
+  let dragged = false
+
+  function savedPlace() {
+    try {
+      const v = Number(localStorage.getItem(PLACE_KEY))
+      return v > 0 && v < 1 ? v : 0.5
+    } catch {
+      return 0.5
+    }
+  }
+
+  function onHandleDown(e: PointerEvent) {
+    if (e.button !== 0) return
+    drag = { id: e.pointerId, startX: e.clientX, start: place, moved: false }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
+
+  function onHandleMove(e: PointerEvent) {
+    if (!drag || e.pointerId !== drag.id) return
+    const dx = e.clientX - drag.startX
+    if (!drag.moved && Math.abs(dx) < 6) return
+    drag.moved = true
+    place = Math.min(0.95, Math.max(0.05, drag.start + dx / window.innerWidth))
+    wake()
+  }
+
+  function onHandleUp(e: PointerEvent) {
+    if (!drag || e.pointerId !== drag.id) return
+    if (drag.moved) {
+      // The click that ends a drag doesn't open the menu.
+      dragged = true
+      try {
+        localStorage.setItem(PLACE_KEY, String(place))
+      } catch {
+        // Not remembered; it still moved.
+      }
+    }
+    drag = null
+  }
+
+  function onHandleClick() {
+    if (dragged) {
+      dragged = false
+      return
+    }
+    open = !open
+  }
+
+  // The handle and its menu stay inside the window, wherever the handle was left.
+  const handleCenter = $derived(
+    Math.min(Math.max(handleWidth / 2, place * windowWidth), windowWidth - handleWidth / 2),
+  )
+  const panelLeft = $derived(
+    Math.min(Math.max(8, handleCenter - panelWidth / 2), windowWidth - panelWidth - 8),
+  )
 
   // The handle fades out while you work and comes back when the pointer nears the top edge.
   let awake = $state(true)
@@ -114,23 +183,44 @@
     return `${name}, ${d.width}×${d.height}`
   }
 
-  const chip = $derived(reconnecting ? 'Reconnecting…' : quality === 'poor' ? 'Slow connection' : null)
+  const chip = $derived(
+    reconnecting
+      ? 'Reconnecting…'
+      : problem
+        ? 'Can’t show this display'
+        : quality === 'poor'
+          ? 'Slow connection'
+          : null,
+  )
 </script>
+
+<svelte:window bind:innerWidth={windowWidth} />
 
 {#if open}
   <!-- Catches the click that closes the menu so it never reaches the remote PC. -->
   <div class="backdrop" role="presentation" onpointerdown={() => (open = false)}></div>
 {/if}
 
-<div class="handle-area" class:visible={awake || open || reconnecting || coarse}>
+<!-- Touch screens can't bring the handle back by hovering, so there it dims instead of hiding. -->
+<div
+  class="handle-area"
+  class:visible={awake || open || reconnecting || !!problem}
+  class:coarse
+  style:left="{handleCenter}px"
+  bind:offsetWidth={handleWidth}
+>
   <button
     class="handle"
     class:open
     aria-expanded={open}
     aria-haspopup="menu"
-    aria-label={chip ? `${chip} Session menu` : 'Session menu'}
-    title={coarse ? undefined : 'Session menu (Ctrl+Alt+Shift+M)'}
-    onclick={() => (open = !open)}
+    aria-label="Session menu"
+    title={coarse ? undefined : 'Session menu (Ctrl+Alt+Shift+M). Drag to move it.'}
+    onpointerdown={onHandleDown}
+    onpointermove={onHandleMove}
+    onpointerup={onHandleUp}
+    onpointercancel={onHandleUp}
+    onclick={onHandleClick}
     onfocus={wake}
   >
     {#if chip}
@@ -139,65 +229,72 @@
       <span class="grip" aria-hidden="true"></span>
     {/if}
   </button>
-
-  {#if open}
-    <!-- svelte-ignore a11y_interactive_supports_focus -->
-    <div
-      bind:this={panel}
-      class="panel"
-      class:checks={displays.length > 1}
-      role="menu"
-      aria-label="Session"
-      onkeydown={onPanelKey}
-    >
-      {#if displays.length > 1}
-        <div class="group" role="group" aria-label="Display">
-          {#each displays as d, i (d.id)}
-            <button
-              class="item"
-              role="menuitemradio"
-              aria-checked={d.id === activeDisplay}
-              tabindex="-1"
-              onclick={() => run(() => onselectdisplay(d.id))}
-            >
-              <span class="check">{#if d.id === activeDisplay}<Icon name="check" />{/if}</span>
-              <span class="text">{displayLabel(d, i)}</span>
-            </button>
-          {/each}
-        </div>
-      {/if}
-
-      <div class="group" role="group">
-        {#if onkeyboard}
-          <button class="item" role="menuitem" tabindex="-1" onclick={() => run(onkeyboard)}>
-            <span class="check"></span>
-            <span class="text">Keyboard</span>
-          </button>
-        {/if}
-        {#if canFullscreen}
-          <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ontogglefullscreen)}>
-            <span class="check"></span>
-            <span class="text">{fullscreen ? 'Exit full screen' : 'Full screen'}</span>
-            {#if !coarse}<kbd>Ctrl+Alt+Shift+F</kbd>{/if}
-          </button>
-        {/if}
-        <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ontogglestats)}>
-          <span class="check"></span>
-          <span class="text">{showStats ? 'Hide connection details' : 'Show connection details'}</span>
-          {#if !coarse}<kbd>Ctrl+Alt+Shift+S</kbd>{/if}
-        </button>
-      </div>
-
-      <div class="group" role="group">
-        <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ondisconnect)}>
-          <span class="check"></span>
-          <span class="text">Disconnect</span>
-          {#if !coarse}<kbd>Ctrl+Alt+Shift+Q</kbd>{/if}
-        </button>
-      </div>
-    </div>
-  {/if}
 </div>
+<span class="announce" aria-live="polite">{chip ?? ''}</span>
+
+{#if open}
+  <!-- svelte-ignore a11y_interactive_supports_focus -->
+  <div
+    bind:this={panel}
+    bind:offsetWidth={panelWidth}
+    class="panel"
+    class:checks={displays.length > 1}
+    style:left="{panelLeft}px"
+    role="menu"
+    aria-label="Session"
+    aria-describedby={problem ? 'session-problem' : undefined}
+    onkeydown={onPanelKey}
+  >
+    {#if problem}
+      <div class="problem" id="session-problem"><ProblemText {problem} /></div>
+    {/if}
+    {#if displays.length > 1}
+      <div class="group" role="group" aria-label="Display">
+        {#each displays as d, i (d.id)}
+          <button
+            class="item"
+            role="menuitemradio"
+            aria-checked={d.id === activeDisplay}
+            tabindex="-1"
+            onclick={() => run(() => onselectdisplay(d.id))}
+          >
+            <span class="check">{#if d.id === activeDisplay}<Icon name="check" />{/if}</span>
+            <span class="text">{displayLabel(d, i)}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+
+    <div class="group" role="group">
+      {#if onkeyboard}
+        <button class="item" role="menuitem" tabindex="-1" onclick={() => run(onkeyboard)}>
+          <span class="check"></span>
+          <span class="text">Keyboard</span>
+        </button>
+      {/if}
+      {#if canFullscreen}
+        <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ontogglefullscreen)}>
+          <span class="check"></span>
+          <span class="text">{fullscreen ? 'Exit full screen' : 'Full screen'}</span>
+          {#if !coarse}<kbd>Ctrl+Alt+Shift+F</kbd>{/if}
+        </button>
+      {/if}
+      <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ontogglestats)}>
+        <span class="check"></span>
+        <span class="text">{showStats ? 'Hide connection details' : 'Show connection details'}</span>
+        {#if !coarse}<kbd>Ctrl+Alt+Shift+S</kbd>{/if}
+      </button>
+    </div>
+
+    <div class="group" role="group">
+      <button class="item" role="menuitem" tabindex="-1" onclick={() => run(ondisconnect)}>
+        <span class="check"></span>
+        <span class="text">Disconnect</span>
+        {#if !coarse}<kbd>Ctrl+Alt+Shift+Q</kbd>{/if}
+      </button>
+    </div>
+  </div>
+{/if}
 
 <style>
   .backdrop {
@@ -208,19 +305,29 @@
   .handle-area {
     position: absolute;
     top: 0;
-    left: 50%;
     transform: translateX(-50%);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
     padding-top: env(safe-area-inset-top);
+    white-space: nowrap;
     opacity: 0;
     transition: opacity 200ms ease;
+  }
+
+  .handle-area.coarse {
+    opacity: 0.5;
   }
 
   .handle-area.visible,
   .handle-area:focus-within {
     opacity: 1;
+  }
+
+  .announce {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .handle {
@@ -236,6 +343,7 @@
     background: var(--overlay-bg);
     color: var(--overlay-text);
     cursor: pointer;
+    touch-action: none;
   }
 
   .handle:hover,
@@ -256,7 +364,8 @@
   }
 
   .panel {
-    margin-top: var(--space-2);
+    position: absolute;
+    top: calc(env(safe-area-inset-top) + 22px + var(--space-2));
     min-width: 260px;
     max-width: calc(100vw - 2 * var(--space-4));
     padding: var(--space-1);
@@ -264,6 +373,18 @@
     border-radius: var(--radius);
     background: var(--overlay-solid);
     color: var(--overlay-text);
+  }
+
+  .problem {
+    max-width: 320px;
+    padding: var(--space-2) var(--space-3) var(--space-3);
+    border-bottom: 1px solid var(--overlay-border);
+    margin-bottom: var(--space-1);
+    --details-color: var(--overlay-muted);
+  }
+
+  .problem :global(.message) {
+    color: var(--overlay-warning);
   }
 
   .group + .group {
@@ -306,7 +427,7 @@
   }
 
   .check {
-    color: var(--overlay-accent);
+    color: var(--overlay-text);
   }
 
   .text {
@@ -325,6 +446,10 @@
     .handle {
       height: 28px;
       min-width: 80px;
+    }
+
+    .panel {
+      top: calc(env(safe-area-inset-top) + 28px + var(--space-2));
     }
 
     /* A finger-sized target without a bigger handle over the remote screen. */
