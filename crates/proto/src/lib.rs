@@ -58,7 +58,12 @@ pub enum UpdateStatus {
     #[serde(rename_all = "camelCase")]
     Installing { version: String },
     #[serde(rename_all = "camelCase")]
-    Failed { message: String },
+    Failed {
+        message: String,
+        /// The update downloaded but didn't install, rather than the check failing.
+        #[serde(default)]
+        installing: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -218,7 +218,8 @@ async fn keep_updated(sup: Arc<Mutex<Supervisor>>, mut requests: mpsc::Receiver<
     if let Some(version) = failed {
         // Not straight away, or an update that can't install would keep restarting this service.
         next_check = Instant::now() + UPDATE_CHECK_EVERY;
-        sup.lock().await.update = UpdateStatus::Failed { message: format!("Conductor {version} didn't install.") };
+        let message = format!("Conductor {version} didn't install.");
+        sup.lock().await.update = UpdateStatus::Failed { message, installing: true };
     }
     loop {
         let wait = if ready.is_some() { INSTALL_RETRY } else { next_check.saturating_duration_since(Instant::now()) };
@@ -255,7 +256,7 @@ async fn keep_updated(sup: Arc<Mutex<Supervisor>>, mut requests: mpsc::Receiver<
                 Ok(None) => UpdateStatus::UpToDate,
                 Err(e) => {
                     tracing::warn!("checking for updates: {e:#}");
-                    UpdateStatus::Failed { message: format!("{e:#}") }
+                    UpdateStatus::Failed { message: format!("{e:#}"), installing: false }
                 }
             };
             sup.lock().await.update = status;
@@ -275,7 +276,7 @@ async fn keep_updated(sup: Arc<Mutex<Supervisor>>, mut requests: mpsc::Receiver<
             Err(e) => e.to_string(),
         };
         tracing::warn!("installing the update: {message}");
-        sup.lock().await.update = UpdateStatus::Failed { message };
+        sup.lock().await.update = UpdateStatus::Failed { message, installing: true };
     }
 }
 

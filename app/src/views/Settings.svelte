@@ -86,9 +86,13 @@
   const updateProblem = $derived(
     update?.state === 'failed'
       ? new Problem(
-          status?.autoUpdate
-            ? 'It tries again in a few hours.'
-            : 'Check this PC’s internet connection, then check again.',
+          update.installing
+            ? status?.autoUpdate
+              ? `This PC is still on ${status.version}. It tries again in a few hours.`
+              : `This PC is still on ${status?.version}. Check again to retry.`
+            : status?.autoUpdate
+              ? 'It tries again in a few hours.'
+              : 'Check this PC’s internet connection, then check again.',
           update.message,
         )
       : null,

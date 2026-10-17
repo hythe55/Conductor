@@ -46,7 +46,7 @@ export interface ControlStatus {
 export type UpdateStatus =
   | { state: 'notChecked' | 'checking' | 'upToDate' }
   | { state: 'ready' | 'installing'; version: string }
-  | { state: 'failed'; message: string }
+  | { state: 'failed'; message: string; installing: boolean }
 
 export type MouseButton = 'left' | 'right' | 'middle' | 'back' | 'forward'
 
