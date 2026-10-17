@@ -17,7 +17,11 @@ pub struct Injector {
 }
 
 fn send(inputs: &[INPUT]) {
-    unsafe { SendInput(inputs, size_of::<INPUT>() as i32) };
+    let sent = unsafe { SendInput(inputs, size_of::<INPUT>() as i32) };
+    // Fails while a secure desktop (lock screen, UAC) has input; move there and retry.
+    if (sent as usize) < inputs.len() && crate::desktop::follow_input() {
+        unsafe { SendInput(inputs, size_of::<INPUT>() as i32) };
+    }
 }
 
 fn mouse(flags: MOUSE_EVENT_FLAGS, dx: i32, dy: i32, data: i32) -> INPUT {

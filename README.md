@@ -1,0 +1,69 @@
+# Conductor
+
+Control your Windows PCs from your other devices, over your own [Tailscale](https://tailscale.com) network. There are no accounts and no servers in the middle: every PC you install Conductor on can be seen and controlled by your other devices on the same tailnet, and by nobody else.
+
+- Full keyboard and mouse control, on every display
+- Works at the sign-in screen, the lock screen, and on UAC prompts
+- Hardware video encoding with low latency, and adapts to the connection
+- Sends nothing while nobody is watching
+- Control from the Windows app, the Android app, or any browser on your tailnet
+
+Conductor is under active development. Some features listed in the [roadmap](#roadmap) aren't built yet.
+
+## Requirements
+
+- Windows 10 or 11 on each PC you want to control
+- Tailscale on every device, signed in to the same account
+- In Tailscale on each PC, turn on **Run unattended** (right-click the Tailscale icon, then Preferences). Without it, Tailscale disconnects when you sign out, and the PC can't be reached until someone signs in again.
+
+## Install
+
+Download the latest installer from [Releases](https://github.com/hythe55/Conductor/releases) and run it on each PC. The installer sets up a small background service so the PC stays reachable after a restart. You can turn this off in Conductor's settings.
+
+Windows may warn that the installer is from an unknown publisher, because it isn't code-signed yet. Choose **More info**, then **Run anyway**.
+
+## Use it from a browser
+
+Every PC running Conductor also serves the web client on your tailnet. Open `http://<pc-name>:4280` from any device signed in to your Tailscale account.
+
+## Security
+
+- A PC only accepts connections from devices that belong to the same Tailscale user as the PC itself. Conductor asks the local Tailscale service who is connecting; there are no passwords to leak.
+- The firewall rule the installer adds only admits Tailscale addresses.
+- Requests from websites other than Conductor itself are refused, so a page you visit can't talk to your PCs through your browser.
+- Video, audio and input are encrypted end to end by WebRTC, inside Tailscale's own encryption.
+
+## How it works
+
+Each PC runs two pieces:
+
+- `conductor-host service` runs as a Windows service. It keeps the agent running in whichever session is on the screen and answers the local app.
+- `conductor-host agent` captures the screen with the Desktop Duplication API, encodes it with the GPU's H.264 encoder, and streams it over WebRTC. It only does this while someone is connected, and only sends frames when the screen changes.
+
+The Windows and Android apps are built with [Tauri](https://tauri.app). Their interface is the same web client every PC serves.
+
+## Build from source
+
+You need Rust (stable), Node.js 20 or newer, and the Visual Studio C++ build tools.
+
+```
+cd app
+npm install
+npm run tauri build
+```
+
+The installer ends up in `target/release/bundle/nsis/`. To run the host without installing the service, build it with `cargo build -p conductor-host` and run `target/debug/conductor-host.exe` from the repository root.
+
+## Roadmap
+
+- Android app with touch controls
+- Virtual displays, sized to the device you're controlling from
+- Clipboard sync and file transfer
+- Audio, even when the PC's speakers are muted
+- Wake-on-LAN, shown only after a test wake succeeds
+- Power actions and scheduled sleep, shutdown and restart
+- Automatic updates
+
+## License
+
+[GPL-3.0](LICENSE)

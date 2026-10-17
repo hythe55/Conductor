@@ -17,7 +17,6 @@ use windows::core::{GUID, Interface};
 
 pub struct EncodedFrame {
     pub data: Vec<u8>,
-    pub keyframe: bool,
     /// Sample time in 100ns units, as given to `encode`.
     pub time: i64,
 }
@@ -39,8 +38,6 @@ pub struct Encoder {
     sequence_header: Option<Vec<u8>>,
     pub name: String,
     pub hardware: bool,
-    pub width: u32,
-    pub height: u32,
     fps: u32,
 }
 
@@ -260,8 +257,6 @@ impl Encoder {
                 sequence_header,
                 name: String::new(),
                 hardware: true,
-                width,
-                height,
                 fps,
             })
         }
@@ -278,8 +273,8 @@ impl Encoder {
                 Err(e) => return Err(e).context("encoder GetEvent"),
             };
             match MF_EVENT_TYPE(unsafe { event.GetType()? } as i32) {
-                METransformNeedInput => self.need_input += 1,
-                METransformHaveOutput => {
+                t if t == METransformNeedInput => self.need_input += 1,
+                t if t == METransformHaveOutput => {
                     if let Some(f) = self.pull()? {
                         frames.push(f);
                     }
@@ -373,7 +368,7 @@ impl Encoder {
             }
             data.extend_from_slice(bytes);
             buffer.Unlock()?;
-            Ok(Some(EncodedFrame { data, keyframe, time }))
+            Ok(Some(EncodedFrame { data, time }))
         }
     }
 }

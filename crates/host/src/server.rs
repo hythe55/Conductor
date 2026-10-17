@@ -38,23 +38,22 @@ pub fn router(state: Arc<AppState>) -> Router {
 }
 
 /// Only this tailnet user's devices (and localhost) get in. The Host header
-/// check stops DNS-rebinding pages from talking to us through the browser.
+/// check stops DNS-rebinding pages from talking to us through the browser,
+/// and the Origin check stops other websites open on a tailnet device.
 async fn gate(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
     next: Next,
 ) -> Response {
-    let host = req
-        .headers()
-        .get(header::HOST)
-        .and_then(|h| h.to_str().ok())
-        .map(|h| h.rsplit_once(':').map_or(h, |(name, port)| if port.chars().all(|c| c.is_ascii_digit()) { name } else { h }))
-        .unwrap_or("")
-        .trim_matches(['[', ']'])
-        .to_ascii_lowercase();
+    let host = req.headers().get(header::HOST).and_then(|h| h.to_str().ok()).map(host_name).unwrap_or_default();
     if !host_allowed(&state, &host) {
         return (StatusCode::MISDIRECTED_REQUEST, "unknown host").into_response();
+    }
+    if let Some(origin) = req.headers().get(header::ORIGIN) {
+        if !origin_allowed(&state, origin) {
+            return (StatusCode::FORBIDDEN, "Requests from this website aren't allowed.").into_response();
+        }
     }
     if !state.gate.allows(peer.ip()).await {
         return (StatusCode::FORBIDDEN, "This device isn't allowed to connect.").into_response();
@@ -62,10 +61,25 @@ async fn gate(
     next.run(req).await
 }
 
+/// Lowercase host from a `host[:port]` authority, without IPv6 brackets.
+fn host_name(authority: &str) -> String {
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        rest.split(']').next().unwrap_or(rest)
+    } else if authority.matches(':').count() > 1 {
+        // A bare IPv6 address has no port.
+        authority
+    } else {
+        authority.split(':').next().unwrap_or(authority)
+    };
+    host.to_ascii_lowercase()
+}
+
+fn is_loopback(host: &str) -> bool {
+    host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
 fn host_allowed(state: &AppState, host: &str) -> bool {
-    host == "localhost"
-        || host == "127.0.0.1"
-        || host == "::1"
+    is_loopback(host)
         || host == state.tailscale_ip.to_string()
         || host == state.dns_label
         || host == state.fqdn
@@ -73,7 +87,8 @@ fn host_allowed(state: &AppState, host: &str) -> bool {
 
 /// Browsers may call this API from the Conductor app itself or from the web
 /// client served by any of the owner's machines. Everything else (including
-/// arbitrary websites open on a tailnet device) is refused.
+/// websites open on a tailnet device, or other people's shared machines) is
+/// refused.
 fn origin_allowed(state: &AppState, origin: &HeaderValue) -> bool {
     let Ok(origin) = origin.to_str() else { return false };
     if APP_ORIGINS.contains(&origin) {
@@ -82,24 +97,12 @@ fn origin_allowed(state: &AppState, origin: &HeaderValue) -> bool {
     let Some(rest) = origin.strip_prefix("http://").or_else(|| origin.strip_prefix("https://")) else {
         return false;
     };
-    let host = match rest.rsplit_once(':') {
-        Some((h, port)) if port.chars().all(|c| c.is_ascii_digit()) => h,
-        _ => rest,
-    };
-    let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
-    match host.parse::<std::net::IpAddr>() {
-        Ok(ip) => is_tailscale_ip(ip),
-        Err(_) => state.is_tailnet_name(&host),
+    let host = host_name(rest);
+    if is_loopback(&host) {
+        // Pages served on this PC, such as the web client opened locally.
+        return true;
     }
-}
-
-fn is_tailscale_ip(ip: std::net::IpAddr) -> bool {
-    match ip {
-        // 100.64.0.0/10 (CGNAT range Tailscale assigns from).
-        std::net::IpAddr::V4(v4) => v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64,
-        // fd7a:115c:a1e0::/48
-        std::net::IpAddr::V6(v6) => v6.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0],
-    }
+    state.is_own_device(&host)
 }
 
 async fn info(State(state): State<Arc<AppState>>) -> Json<HostInfo> {
@@ -143,12 +146,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tailscale_ranges() {
-        assert!(is_tailscale_ip("100.101.102.103".parse().unwrap()));
-        assert!(is_tailscale_ip("100.64.0.1".parse().unwrap()));
-        assert!(!is_tailscale_ip("100.128.0.1".parse().unwrap()));
-        assert!(!is_tailscale_ip("192.168.1.10".parse().unwrap()));
-        assert!(is_tailscale_ip("fd7a:115c:a1e0::1".parse().unwrap()));
-        assert!(!is_tailscale_ip("fd00::1".parse().unwrap()));
+    fn host_names() {
+        assert_eq!(host_name("MSI-1:4280"), "msi-1");
+        assert_eq!(host_name("[::1]:4280"), "::1");
+        assert_eq!(host_name("::1"), "::1");
+        assert_eq!(host_name("pc.tail1234.ts.net"), "pc.tail1234.ts.net");
     }
 }

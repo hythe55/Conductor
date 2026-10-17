@@ -27,7 +27,8 @@ pub struct AppState {
     status: Mutex<(Status, Instant)>,
     devices: Mutex<Option<(Vec<Device>, Instant)>>,
     /// Names of the owner's machines, for checking request origins.
-    peer_names: RwLock<(HashSet<String>, String)>,
+    /// Names and addresses of the owner's own devices, lowercase.
+    own_hosts: RwLock<HashSet<String>>,
 }
 
 impl AppState {
@@ -41,7 +42,7 @@ impl AppState {
             gate: Gate::new(&status)?,
             web_dir,
             sessions: AtomicUsize::new(0),
-            peer_names: RwLock::new(peer_names(&status)),
+            own_hosts: RwLock::new(own_hosts(&status)),
             status: Mutex::new((status, Instant::now())),
             devices: Mutex::new(None),
         });
@@ -58,7 +59,7 @@ impl AppState {
         if cached.1.elapsed() > STATUS_TTL {
             match conductor_tailnet::status().await {
                 Ok(s) if s.is_running() => {
-                    *self.peer_names.write().unwrap() = peer_names(&s);
+                    *self.own_hosts.write().unwrap() = own_hosts(&s);
                     *cached = (s, Instant::now());
                 }
                 Ok(_) => {}
@@ -84,23 +85,22 @@ impl AppState {
     }
 
     /// True for page origins served by one of the owner's machines.
-    pub fn is_tailnet_name(&self, host: &str) -> bool {
-        let names = self.peer_names.read().unwrap();
-        let (labels, suffix) = &*names;
-        labels.contains(host) || (!suffix.is_empty() && host.ends_with(&format!(".{suffix}")))
+    /// Whether `host` (lowercase, no port) names one of the owner's devices.
+    pub fn is_own_device(&self, host: &str) -> bool {
+        self.own_hosts.read().unwrap().contains(host)
     }
 }
 
-fn peer_names(status: &Status) -> (HashSet<String>, String) {
+fn own_hosts(status: &Status) -> HashSet<String> {
     let owner = status.owner();
-    let labels = status
-        .self_node
-        .iter()
-        .chain(status.peer.values())
-        .filter(|n| Some(n.user_id) == owner)
-        .map(|n| n.short_name())
-        .collect();
-    (labels, status.magic_dns_suffix.to_ascii_lowercase())
+    let mut hosts = HashSet::new();
+    for node in status.self_node.iter().chain(status.peer.values()).filter(|n| Some(n.user_id) == owner) {
+        hosts.insert(node.short_name());
+        hosts.insert(node.fqdn().to_ascii_lowercase());
+        hosts.extend(node.tailscale_ips.iter().map(|ip| ip.to_string()));
+    }
+    hosts.remove("");
+    hosts
 }
 
 pub struct SessionGuard(Arc<AppState>);

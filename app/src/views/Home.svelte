@@ -1,15 +1,19 @@
 <script lang="ts">
-  import { deviceUrl, devices as fetchDevices } from '../lib/api'
+  import { deviceUrl } from '../lib/api'
+  import { isDesktopApp, listDevices } from '../lib/platform'
   import type { Device, HostInfo } from '../lib/types'
 
-  let { onconnect }: { onconnect: (t: { url: string; info: HostInfo }) => void } = $props()
+  let {
+    onconnect,
+    onsettings,
+  }: { onconnect: (t: { url: string; info: HostInfo }) => void; onsettings: () => void } = $props()
 
   let list = $state<Device[] | null>(null)
   let error = $state<string | null>(null)
 
   async function load() {
     try {
-      list = (await fetchDevices('')).filter((d) => !d.isYou)
+      list = (await listDevices()).filter((d) => !d.isYou)
       error = null
     } catch (e) {
       // Keep showing the last good list; only an empty screen needs the error.
@@ -61,7 +65,12 @@
 </script>
 
 <main>
-  <h1>Devices</h1>
+  <header>
+    <h1>Devices</h1>
+    {#if isDesktopApp}
+      <button class="link" onclick={onsettings}>Settings</button>
+    {/if}
+  </header>
 
   {#if error}
     <div class="problem" role="alert">
@@ -103,12 +112,31 @@
     padding-top: max(var(--space-8), env(safe-area-inset-top));
   }
 
+  header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: var(--space-4);
+  }
+
   h1 {
-    margin: 0 0 var(--space-4);
+    margin: 0;
     font-family: var(--font-display);
     font-size: 15px;
     font-weight: 600;
     color: var(--text-muted);
+  }
+
+  .link {
+    padding: var(--space-1) 0;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .link:hover {
+    color: var(--text);
   }
 
   .quiet {

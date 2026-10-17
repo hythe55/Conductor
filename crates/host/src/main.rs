@@ -1,33 +1,62 @@
 //! Conductor host: makes this PC controllable from your other tailnet devices.
+//!
+//! ```text
+//! conductor-host              serve in the foreground (development)
+//! conductor-host install      register the service and firewall rule (admin)
+//! conductor-host uninstall    remove them (admin)
+//! conductor-host service      entry point for the Windows service manager
+//! conductor-host agent        started by the service in the console session
+//! ```
 
 mod capture;
 mod convert;
+mod desktop;
 mod displays;
 mod encoder;
 mod input;
+mod install;
 mod pipeline;
 mod server;
+mod service;
 mod session;
+mod settings;
+mod spawn;
 mod state;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use tracing_subscriber::EnvFilter;
 
+#[derive(PartialEq)]
+enum Mode {
+    Foreground,
+    Agent,
+    Service,
+    Install,
+    Uninstall,
+}
+
 struct Args {
+    mode: Mode,
     port: u16,
     web_dir: PathBuf,
 }
 
 fn parse_args() -> Result<Args> {
+    let mut mode = Mode::Foreground;
     let mut port = conductor_proto::DEFAULT_PORT;
     let mut web_dir = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
+            "agent" => mode = Mode::Agent,
+            "service" => mode = Mode::Service,
+            "install" => mode = Mode::Install,
+            "uninstall" => mode = Mode::Uninstall,
             "--port" => port = it.next().context("--port needs a value")?.parse()?,
             "--web-dir" => web_dir = Some(PathBuf::from(it.next().context("--web-dir needs a value")?)),
             other => anyhow::bail!("unknown argument {other}"),
@@ -35,13 +64,48 @@ fn parse_args() -> Result<Args> {
     }
     let web_dir = web_dir.unwrap_or_else(|| {
         let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.to_path_buf()));
-        let bundled = exe_dir.map(|d| d.join("web"));
-        match bundled {
+        match exe_dir.map(|d| d.join("web")) {
             Some(d) if d.join("index.html").exists() => d,
             _ => PathBuf::from("app/dist"),
         }
     });
-    Ok(Args { port, web_dir })
+    Ok(Args { mode, port, web_dir })
+}
+
+fn init_logging(file: Option<&str>) {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,str0m=warn"));
+    let builder = tracing_subscriber::fmt().with_env_filter(filter);
+    match file.map(settings::log_file) {
+        Some(Ok(f)) => builder.with_ansi(false).with_writer(Mutex::new(f)).init(),
+        _ => builder.init(),
+    }
+}
+
+fn main() -> Result<()> {
+    let args = parse_args()?;
+    match args.mode {
+        Mode::Install => {
+            init_logging(None);
+            install::install()
+        }
+        Mode::Uninstall => {
+            init_logging(None);
+            install::uninstall()
+        }
+        Mode::Service => {
+            init_logging(Some("service.log"));
+            service::run()
+        }
+        Mode::Agent | Mode::Foreground => {
+            init_logging((args.mode == Mode::Agent).then_some("agent.log"));
+            let rt = tokio::runtime::Runtime::new()?;
+            let result = rt.block_on(serve(args));
+            if let Err(e) = &result {
+                tracing::error!("{e:#}");
+            }
+            result
+        }
+    }
 }
 
 fn dpi_aware() {
@@ -63,14 +127,9 @@ async fn wait_for_tailscale() -> conductor_tailnet::Status {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,str0m=warn")))
-        .init();
+async fn serve(args: Args) -> Result<()> {
     dpi_aware();
     str0m::crypto::from_feature_flags().install_process_default();
-    let args = parse_args()?;
 
     let status = wait_for_tailscale().await;
     let ip = status.self_node.as_ref().and_then(|n| n.ipv4()).context("no Tailscale IPv4 address")?;

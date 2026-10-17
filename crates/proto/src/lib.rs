@@ -11,6 +11,29 @@ pub const DEFAULT_PORT: u16 = 4280;
 /// Wire protocol version. Bumped on breaking changes.
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// Named pipe the Conductor service listens on for the local app.
+pub const CONTROL_PIPE: &str = r"\\.\pipe\conductor";
+
+/// One JSON line sent by the local app to the service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "camelCase")]
+pub enum ControlRequest {
+    Status,
+    #[serde(rename_all = "camelCase")]
+    SetHosting { enabled: bool },
+}
+
+/// The service's reply to every [`ControlRequest`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlStatus {
+    /// Other devices may control this PC.
+    pub hosting: bool,
+    /// The agent that serves sessions is running right now.
+    pub agent_running: bool,
+    pub version: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostInfo {

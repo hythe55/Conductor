@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Web client
+        working-directory: app
+        run: |
+          npm ci
+          npm run check
+          npm run build
+      # The app bundles the release host binary, so build that before anything else.
+      - name: Host
+        run: cargo build --release -p conductor-host
+      - name: Tests
+        run: cargo test --workspace

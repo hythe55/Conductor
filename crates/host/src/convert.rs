@@ -18,8 +18,6 @@ pub struct Converter {
     input: ID3D11VideoProcessorInputView,
     outputs: Vec<(ID3D11Texture2D, ID3D11VideoProcessorOutputView)>,
     next: usize,
-    pub width: u32,
-    pub height: u32,
 }
 
 impl Converter {
@@ -85,7 +83,7 @@ impl Converter {
             vctx.VideoProcessorSetOutputTargetRect(&vp, true, Some(&dst));
         }
 
-        Ok(Self { vctx, vp, input, outputs, next: 0, width: out_w, height: out_h })
+        Ok(Self { vctx, vp, input, outputs, next: 0 })
     }
 
     /// Converts the source texture into the next NV12 texture and returns it.

@@ -85,10 +85,6 @@ pub fn find_output(id: Option<&str>) -> Result<Output> {
     Ok(all.swap_remove(idx))
 }
 
-pub fn display_id(o: &Output) -> String {
-    device_name(&o.desc)
-}
-
 pub fn create_device(adapter: &IDXGIAdapter1) -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     let mut device = None;
     let mut context = None;
@@ -138,6 +134,7 @@ pub struct Capture {
 
 impl Capture {
     pub fn new(display: Option<&str>) -> Result<Self> {
+        crate::desktop::follow_input();
         let out = find_output(display)?;
         let (device, context) = create_device(&out.adapter)?;
         let r = out.desc.DesktopCoordinates;
@@ -178,6 +175,7 @@ impl Capture {
     pub fn next(&mut self, timeout_ms: u32) -> Result<Frame> {
         if self.dup.is_none() {
             // Lost earlier (mode change, secure desktop). Keep trying quietly.
+            crate::desktop::follow_input();
             match self.duplicate() {
                 Ok(()) => {}
                 Err(e) if e.is::<ResolutionChanged>() => return Err(e),

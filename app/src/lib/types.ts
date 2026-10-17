@@ -31,6 +31,12 @@ export interface Device {
   isYou: boolean
 }
 
+export interface ControlStatus {
+  hosting: boolean
+  agentRunning: boolean
+  version: string
+}
+
 export type MouseButton = 'left' | 'right' | 'middle' | 'back' | 'forward'
 
 export type ClientMsg =

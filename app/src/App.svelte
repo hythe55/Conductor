@@ -1,5 +1,6 @@
 <script lang="ts">
   import Home from './views/Home.svelte'
+  import Settings from './views/Settings.svelte'
   import Stream from './views/Stream.svelte'
   import type { HostInfo } from './lib/types'
 
@@ -8,27 +9,32 @@
     info: HostInfo
   }
 
-  let target = $state<Target | null>(null)
+  type View = { name: 'home' } | { name: 'settings' } | { name: 'stream'; target: Target }
 
-  function open(t: Target) {
-    target = t
-    history.pushState({ stream: true }, '')
+  let view = $state<View>({ name: 'home' })
+
+  // Each screen gets a history entry so the back button and gesture work.
+  function go(next: View) {
+    view = next
+    history.pushState({ view: next.name }, '')
   }
 
-  function close() {
-    if (history.state?.stream) history.back()
-    else target = null
+  function back() {
+    if (history.state?.view) history.back()
+    else view = { name: 'home' }
   }
 
   $effect(() => {
-    const onPop = () => (target = null)
+    const onPop = () => (view = { name: 'home' })
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   })
 </script>
 
-{#if target}
-  <Stream url={target.url} info={target.info} onclose={close} />
+{#if view.name === 'stream'}
+  <Stream url={view.target.url} info={view.target.info} onclose={back} />
+{:else if view.name === 'settings'}
+  <Settings onback={back} />
 {:else}
-  <Home onconnect={open} />
+  <Home onconnect={(target) => go({ name: 'stream', target })} onsettings={() => go({ name: 'settings' })} />
 {/if}
