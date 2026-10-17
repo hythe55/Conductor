@@ -38,6 +38,17 @@ export interface HostInfo {
   wake?: WakeInfo
   /** `/api/preview` has a picture of its main display. From 0.1.11. */
   preview?: boolean
+  /** Power actions it takes at set times. Missing before 0.1.11. */
+  schedule?: PowerSchedule[]
+}
+
+/** Something a PC does on its own at a set time, unless it's in use. */
+export interface PowerSchedule {
+  action: PowerAction
+  /** Local time on that PC, in minutes after midnight. */
+  at: number
+  /** 0 for Sunday to 6 for Saturday. */
+  days: number[]
 }
 
 export interface WakeInfo {

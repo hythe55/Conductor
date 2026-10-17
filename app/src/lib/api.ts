@@ -1,5 +1,5 @@
 import { Problem } from './errors'
-import type { Device, HostInfo, PowerAction, WakeAdapter, WakeInfo } from './types'
+import type { Device, HostInfo, PowerAction, PowerSchedule, WakeAdapter, WakeInfo } from './types'
 
 /** The PC didn't answer at all. */
 export class Unreachable extends Problem {}
@@ -78,6 +78,11 @@ export async function reachable(host: HostUrl): Promise<boolean> {
 
 export function power(host: HostUrl, action: PowerAction): Promise<void> {
   return post(`${host}/api/power`, { action })
+}
+
+/** Replaces the PC's schedule, and returns it as saved. */
+export function setSchedule(host: HostUrl, schedule: PowerSchedule[]): Promise<PowerSchedule[]> {
+  return post(`${host}/api/schedule`, { schedule })
 }
 
 /** Asks `host` to send wake packets to another PC on its network. */

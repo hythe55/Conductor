@@ -23,6 +23,7 @@ mod install;
 mod pipeline;
 mod power;
 mod preview;
+mod schedule;
 mod server;
 mod service;
 mod session;
@@ -158,6 +159,9 @@ async fn serve(args: Args) -> Result<()> {
     let state = state::AppState::new(status, ip, args.web_dir.clone())?;
 
     let app = server::router(state.clone());
+    if args.mode == Mode::Agent {
+        tokio::spawn(schedule::run(state.clone()));
+    }
     let mut servers = Vec::new();
     for addr in [SocketAddr::new(ip, args.port), SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), args.port)] {
         let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("binding {addr}"))?;

@@ -2,10 +2,12 @@
   import { tick } from 'svelte'
   import Icon from '../components/Icon.svelte'
   import ProblemText from '../components/ProblemText.svelte'
+  import Schedule from '../components/Schedule.svelte'
   import { confirmWake, deviceUrl, power, reachable, Unreachable, wake } from '../lib/api'
   import { Problem, toProblem } from '../lib/errors'
   import { devicesFrom, isDesktopApp, isPhoneApp, knownPcs, listDevices } from '../lib/platform'
-  import type { Device, HostInfo, PowerAction, WakeAdapter } from '../lib/types'
+  import { summary } from '../lib/schedule'
+  import type { Device, HostInfo, PowerAction, PowerSchedule, WakeAdapter } from '../lib/types'
   import { waitUntil, wakerFor } from '../lib/wake'
 
   let {
@@ -26,9 +28,13 @@
     /** Put to sleep or shut down from here, until it's back. */
     | { kind: 'down'; text: string; asleep: boolean; at: number }
     | { kind: 'note'; text: string; problem: boolean }
+    | { kind: 'schedule' }
   /** By device ID. Replaced on every change, so a timer can tell whether its row is still there. */
   let rows = $state.raw<Record<string, Row>>({})
   let menuFor = $state<string | null>(null)
+
+  /** Schedules just changed from here, by device ID, until the list has caught up. */
+  let changedSchedules = $state.raw<Record<string, { schedule: PowerSchedule[]; at: number }>>({})
 
   /** Pictures of PCs' screens, by device ID, as object URLs. */
   let previews = $state.raw<Record<string, string>>({})
@@ -76,6 +82,8 @@
       all = await listDevices()
       error = null
       refreshPreviews(all)
+      const fresh = Object.entries(changedSchedules).filter(([, c]) => Date.now() - c.at < 15_000)
+      if (fresh.length < Object.keys(changedSchedules).length) changedSchedules = Object.fromEntries(fresh)
       // A PC put to sleep or shut down from here answers again. The list can
       // lag a few seconds behind, so only trust it once that's passed.
       for (const d of all) {
@@ -382,17 +390,30 @@
     if (menuFor && !(e.target as Element).closest?.('.more')) menuFor = null
   }
 
+  async function openSchedule(d: Device) {
+    menuFor = null
+    set(d.id, { kind: 'schedule' })
+    await tick()
+    document.querySelector<HTMLElement>(`[data-row="${d.id}"] select`)?.focus()
+  }
+
+  function scheduleOf(d: Device) {
+    return changedSchedules[d.id]?.schedule ?? d.host?.schedule
+  }
+
   function availability(d: Device): 'ready' | 'not-running' | 'offline' {
     if (d.host) return 'ready'
     return d.online && !d.silent ? 'not-running' : 'offline'
   }
 
   function describe(d: Device, row: Row | undefined) {
-    if (row && row.kind !== 'confirm') return row.text
+    if (row && row.kind !== 'confirm' && row.kind !== 'schedule') return row.text
     switch (availability(d)) {
       case 'ready': {
         const n = d.host!.displays.length
-        return `${n} ${n === 1 ? 'display' : 'displays'}`
+        const displays = `${n} ${n === 1 ? 'display' : 'displays'}`
+        const scheduled = summary(scheduleOf(d) ?? [])
+        return scheduled ? `${displays}, ${scheduled}` : displays
       }
       case 'not-running':
         return 'Conductor isn’t running'
@@ -506,7 +527,7 @@
             </span>
           </div>
           <div class="actions">
-            {#if row?.kind === 'busy' || row?.kind === 'confirm'}
+            {#if row?.kind === 'busy' || row?.kind === 'confirm' || row?.kind === 'schedule'}
               <!-- The row says what's going on. -->
             {:else if waker}
               <button class="btn primary" aria-label="Wake {d.name}" onclick={() => start(d, () => runWake(d))}>Wake</button>
@@ -542,6 +563,9 @@
                       <button role="menuitem" tabindex="-1" onclick={() => ask(d, 'sleep')}>Sleep</button>
                       <button role="menuitem" tabindex="-1" onclick={() => ask(d, 'restart')}>Restart</button>
                       <button role="menuitem" tabindex="-1" onclick={() => ask(d, 'shutDown')}>Shut down</button>
+                      {#if d.host.schedule}
+                        <button role="menuitem" tabindex="-1" onclick={() => openSchedule(d)}>Schedule</button>
+                      {/if}
                       {#if canTestWake(d)}
                         <button role="menuitem" tabindex="-1" onclick={() => ask(d, 'testWake')}>Test waking</button>
                       {/if}
@@ -561,6 +585,16 @@
                 <button class="btn" {onkeydown} onclick={() => cancel(d)}>Cancel</button>
               </div>
             </div>
+          {/if}
+          {#if row?.kind === 'schedule' && d.host}
+            <Schedule
+              id={d.id}
+              host={deviceUrl(d)}
+              name={d.name}
+              schedule={scheduleOf(d) ?? []}
+              onchange={(schedule) => (changedSchedules = { ...changedSchedules, [d.id]: { schedule, at: Date.now() } })}
+              onclose={() => cancel(d)}
+            />
           {/if}
         </li>
       {/each}

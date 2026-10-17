@@ -10,7 +10,7 @@ Control your Windows PCs from your other devices, over your own [Tailscale](http
 - A small picture of each PC's screen in the device list, which each PC can turn off
 - Shows who's in control on the PC's screen, or covers the screen so nobody at the PC sees what you're doing
 - Sends nothing while nobody is watching, and nothing for sound while it's quiet
-- Sleep, restart or shut down a PC from your other devices, and wake it again from another PC on its network once a test wake has worked
+- Sleep, restart or shut down a PC from your other devices, now or on a schedule, and wake it again from another PC on its network once a test wake has worked
 - Updates itself from GitHub releases when nobody is using it
 - Control from the Windows app or any browser on your tailnet, with touch controls on phones and tablets
 
@@ -67,7 +67,6 @@ The Android app also needs JDK 17 and the Android SDK and NDK, with `JAVA_HOME`,
 - Android app downloads (it builds from source today)
 - Virtual displays, sized to the device you're controlling from
 - Sound even when the PC's own speakers are muted
-- Scheduled sleep, shutdown and restart
 
 ## License
 

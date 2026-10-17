@@ -94,6 +94,28 @@ pub struct HostInfo {
     /// `GET /api/preview` returns a small JPEG of the main display. Hosts from 0.1.11.
     #[serde(default)]
     pub preview: bool,
+    /// Power actions this PC takes at set times, changed with `POST /api/schedule`.
+    /// Missing from hosts older than 0.1.11.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<Vec<PowerSchedule>>,
+}
+
+/// Something a PC does on its own at a set time, unless it's in use.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PowerSchedule {
+    pub action: PowerAction,
+    /// Local time, in minutes after midnight.
+    pub at: u16,
+    /// Days of the week it happens on, 0 for Sunday to 6 for Saturday.
+    pub days: Vec<u8>,
+}
+
+/// Body of `POST /api/schedule`, which replaces the whole schedule.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleRequest {
+    pub schedule: Vec<PowerSchedule>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

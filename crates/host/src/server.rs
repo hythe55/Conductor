@@ -10,7 +10,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use conductor_proto::{
-    Device, HostInfo, PROTOCOL_VERSION, PowerRequest, SessionRequest, SessionResponse, WakeInfo, WakeRequest,
+    Device, HostInfo, PROTOCOL_VERSION, PowerRequest, PowerSchedule, ScheduleRequest, SessionRequest, SessionResponse,
+    WakeInfo, WakeRequest,
 };
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
@@ -38,6 +39,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/wake/confirm", post(confirm_wake))
         .route("/api/power", post(power))
         .route("/api/preview", get(preview))
+        .route("/api/schedule", post(set_schedule))
         .fallback_service(ServeDir::new(&state.web_dir).fallback(ServeFile::new(index)))
         .layer(middleware::from_fn(revalidate_pages))
         .layer(cors)
@@ -147,7 +149,17 @@ pub fn host_info(state: &AppState) -> HostInfo {
         controllers: state.controllers(),
         wake: Some(crate::wake::info()),
         preview: Settings::load().previews,
+        schedule: Some(crate::schedule::load()),
     }
+}
+
+async fn set_schedule(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(req): Json<ScheduleRequest>,
+) -> Result<Json<Vec<PowerSchedule>>, (StatusCode, String)> {
+    tracing::info!("{} set this PC's schedule: {:?}", state.device_name(peer.ip()).await, req.schedule);
+    crate::schedule::save(req.schedule).map(Json).map_err(|e| (StatusCode::BAD_REQUEST, format!("{e:#}")))
 }
 
 /// A small picture of the main display, for device lists.
