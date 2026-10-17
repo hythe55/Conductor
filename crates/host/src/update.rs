@@ -9,7 +9,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::windows::ffi::OsStringExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 
@@ -21,6 +21,7 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
 
 use crate::https::{self, HttpStatus};
 use crate::settings::{data_dir, secure_data_dir, updates_dir};
@@ -112,10 +113,14 @@ fn save(bytes: &[u8], file: &str) -> Result<PathBuf> {
 /// Starts the installer and waits for it. When it works, the installer stops
 /// this service and starts the new one, so this only returns on failure.
 pub fn install(update: &Update) -> Result<()> {
+    // Read by the next service to start, to tell whether the update happened.
+    fs::write(attempt_marker(), &update.version).context("recording the update")?;
     let sessions = app_sessions();
     if !sessions.is_empty() {
         let list: Vec<String> = sessions.iter().map(u32::to_string).collect();
         fs::write(reopen_marker(), list.join(",")).context("remembering to reopen the app")?;
+        // The installer can't replace the app while it's open.
+        close_app();
     }
     tracing::info!("installing Conductor {}", update.version);
     // /UPDATE keeps the user's shortcuts as they are.
@@ -123,6 +128,7 @@ pub fn install(update: &Update) -> Result<()> {
         .args(["/S", "/UPDATE"])
         .status()
         .context("starting the installer")?;
+    _ = fs::remove_file(attempt_marker());
     _ = fs::remove_file(reopen_marker());
     bail!("the installer stopped with {status}")
 }
@@ -131,14 +137,30 @@ fn reopen_marker() -> PathBuf {
     data_dir().join("reopen-app")
 }
 
+fn attempt_marker() -> PathBuf {
+    data_dir().join("update-attempt")
+}
+
 /// Removes downloaded installers.
 pub fn remove_downloads() {
     _ = fs::remove_dir_all(updates_dir());
 }
 
 /// Runs when the service starts: right after an update, reopens the app
-/// wherever the installer closed it.
-pub fn after_start(app: PathBuf) {
+/// wherever it was closed. Returns the version that was being installed if
+/// that update didn't happen (the installer put this version back).
+pub fn after_start(app: PathBuf) -> Option<String> {
+    let attempted = fs::read_to_string(attempt_marker()).ok();
+    _ = fs::remove_file(attempt_marker());
+    let failed = attempted.map(|v| v.trim().to_string()).filter(|v| v != env!("CARGO_PKG_VERSION"));
+    if let Some(version) = &failed {
+        tracing::warn!("Conductor {version} didn't install");
+    }
+    reopen(&app);
+    failed
+}
+
+fn reopen(app: &Path) {
     let marker = reopen_marker();
     let Ok(meta) = fs::metadata(&marker) else { return };
     let recent = meta.modified().ok().and_then(|t| SystemTime::now().duration_since(t).ok()) < Some(REOPEN_WITHIN);
@@ -148,7 +170,7 @@ pub fn after_start(app: PathBuf) {
         return;
     }
     for session in sessions.split(',').filter_map(|s| s.trim().parse::<u32>().ok()) {
-        match crate::spawn::spawn_as_user(session, &app) {
+        match crate::spawn::spawn_as_user(session, app) {
             Ok(()) => tracing::info!("reopened the app in session {session}"),
             Err(e) => tracing::warn!("reopening the app in session {session}: {e:#}"),
         }
@@ -160,27 +182,49 @@ pub fn app_sessions() -> Vec<u32> {
     sessions_running(APP_EXE)
 }
 
+/// Closes the app everywhere it's open.
+fn close_app() {
+    for pid in processes_named(APP_EXE) {
+        unsafe {
+            let Ok(process) = OpenProcess(PROCESS_TERMINATE, false, pid) else { continue };
+            if let Err(e) = TerminateProcess(process, 0) {
+                tracing::warn!("closing the app (process {pid}): {e}");
+            }
+            _ = CloseHandle(process);
+        }
+    }
+}
+
 /// Sessions with a process whose executable is named `exe`.
 fn sessions_running(exe: &str) -> Vec<u32> {
     let mut sessions = Vec::new();
+    for pid in processes_named(exe) {
+        let mut session = 0;
+        if unsafe { ProcessIdToSessionId(pid, &mut session) }.is_ok() && !sessions.contains(&session) {
+            sessions.push(session);
+        }
+    }
+    sessions
+}
+
+/// Ids of the processes whose executable is named `exe`.
+fn processes_named(exe: &str) -> Vec<u32> {
+    let mut pids = Vec::new();
     unsafe {
-        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return sessions };
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return pids };
         let mut entry = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
         let mut more = Process32FirstW(snapshot, &mut entry).is_ok();
         while more {
             let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
             let name = std::ffi::OsString::from_wide(&entry.szExeFile[..len]);
             if name.to_string_lossy().eq_ignore_ascii_case(exe) {
-                let mut session = 0;
-                if ProcessIdToSessionId(entry.th32ProcessID, &mut session).is_ok() && !sessions.contains(&session) {
-                    sessions.push(session);
-                }
+                pids.push(entry.th32ProcessID);
             }
             more = Process32NextW(snapshot, &mut entry).is_ok();
         }
         _ = CloseHandle(snapshot);
     }
-    sessions
+    pids
 }
 
 /// Whether `candidate` is a later `major.minor.patch` than `current`.

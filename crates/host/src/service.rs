@@ -181,9 +181,7 @@ impl Supervisor {
 
 async fn supervise(mut stop: watch::Receiver<bool>, wake: Arc<Notify>) -> Result<()> {
     let exe = std::env::current_exe()?;
-    if let Some(dir) = exe.parent() {
-        update::after_start(dir.join(update::APP_EXE));
-    }
+    let failed_update = exe.parent().and_then(|dir| update::after_start(dir.join(update::APP_EXE)));
     let (updates, update_requests) = mpsc::channel(4);
     let sup = Arc::new(Mutex::new(Supervisor {
         settings: Settings::load(),
@@ -196,7 +194,7 @@ async fn supervise(mut stop: watch::Receiver<bool>, wake: Arc<Notify>) -> Result
         updates,
     }));
     let pipe = tokio::spawn(serve_pipe(sup.clone(), wake.clone()));
-    let updater = tokio::spawn(keep_updated(sup.clone(), update_requests));
+    let updater = tokio::spawn(keep_updated(sup.clone(), update_requests, failed_update));
 
     loop {
         sup.lock().await.reconcile();
@@ -214,9 +212,14 @@ async fn supervise(mut stop: watch::Receiver<bool>, wake: Arc<Notify>) -> Result
 
 /// Checks for updates now and then, and installs them when nobody is using
 /// Conductor: no one is controlling this PC and the app is closed here.
-async fn keep_updated(sup: Arc<Mutex<Supervisor>>, mut requests: mpsc::Receiver<UpdateRequest>) {
+async fn keep_updated(sup: Arc<Mutex<Supervisor>>, mut requests: mpsc::Receiver<UpdateRequest>, failed: Option<String>) {
     let mut ready: Option<Update> = None;
     let mut next_check = Instant::now() + FIRST_UPDATE_CHECK;
+    if let Some(version) = failed {
+        // Not straight away, or an update that can't install would keep restarting this service.
+        next_check = Instant::now() + UPDATE_CHECK_EVERY;
+        sup.lock().await.update = UpdateStatus::Failed { message: format!("Conductor {version} didn't install.") };
+    }
     loop {
         let wait = if ready.is_some() { INSTALL_RETRY } else { next_check.saturating_duration_since(Instant::now()) };
         let request = tokio::select! {
