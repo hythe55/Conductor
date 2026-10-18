@@ -8,7 +8,7 @@
   import { devicesFrom, isDesktopApp, isPhoneApp, knownPcs, listDevices } from '../lib/platform'
   import { summary } from '../lib/schedule'
   import { share } from '../lib/share.svelte'
-  import type { Device, HostInfo, PowerAction, PowerSchedule, WakeAdapter } from '../lib/types'
+  import type { Device, DisplayInfo, HostInfo, PowerAction, PowerSchedule, WakeAdapter } from '../lib/types'
   import { waitUntil, wakerFor } from '../lib/wake'
 
   let {
@@ -33,6 +33,7 @@
   /** By device ID. Replaced on every change, so a timer can tell whether its row is still there. */
   let rows = $state.raw<Record<string, Row>>({})
   let menuFor = $state<string | null>(null)
+  let heading: HTMLElement
 
   /** Schedules just changed from here, by device ID, until the list has caught up. */
   let changedSchedules = $state.raw<Record<string, { schedule: PowerSchedule[]; at: number }>>({})
@@ -165,6 +166,8 @@
     error = null
     all = null
     load()
+    // The button goes away while it looks.
+    heading.focus()
   }
 
   function set(id: string, row: Row | null) {
@@ -349,6 +352,28 @@
     testWake: 'Test waking',
   }
 
+  /**
+   * Where a PC's displays sit relative to each other, as a drawing for its
+   * screen when there's no picture of it.
+   */
+  function arrangement(displays: DisplayInfo[]) {
+    if (!displays.length) return null
+    const left = Math.min(...displays.map((d) => d.x))
+    const top = Math.min(...displays.map((d) => d.y))
+    const width = Math.max(...displays.map((d) => d.x + d.width)) - left
+    const height = Math.max(...displays.map((d) => d.y + d.height)) - top
+    // Displays that touch are drawn apart.
+    const gap = Math.max(width, height) * 0.015
+    const rects = displays.map((d) => ({
+      x: d.x - left + gap,
+      y: d.y - top + gap,
+      width: Math.max(d.width - 2 * gap, gap),
+      height: Math.max(d.height - 2 * gap, gap),
+      primary: d.primary,
+    }))
+    return { width, height, rects }
+  }
+
   async function toggleMenu(d: Device) {
     menuFor = menuFor === d.id ? null : d.id
     await tick()
@@ -378,6 +403,8 @@
         document.querySelector<HTMLElement>(`[data-more="${d.id}"]`)?.focus()
         return
       case 'Tab':
+        // Onward from the power button, as if the menu had never opened.
+        document.querySelector<HTMLElement>(`[data-more="${d.id}"]`)?.focus()
         menuFor = null
         return
       default:
@@ -388,7 +415,17 @@
   }
 
   function closeMenuOutside(e: PointerEvent) {
-    if (menuFor && !(e.target as Element).closest?.('.more')) menuFor = null
+    if (!menuFor || (e.target as Element).closest?.('.more')) return
+    menuFor = null
+    // Like any menu, the click that closes it does nothing else, such as connecting.
+    const swallow = (c: MouseEvent) => {
+      c.stopPropagation()
+      c.preventDefault()
+    }
+    window.addEventListener('click', swallow, { capture: true, once: true })
+    // A press that never became a click.
+    const forget = () => window.removeEventListener('click', swallow, { capture: true })
+    window.addEventListener('pointerdown', forget, { capture: true, once: true })
   }
 
   async function openSchedule(d: Device) {
@@ -428,6 +465,12 @@
         return d.wake?.verified && !wakerFor(d, all ?? []) ? `${seen}. To wake it, turn on another PC on its network.` : seen
       }
     }
+  }
+
+  /** Probably asleep rather than off. */
+  function asleep(d: Device, row: Row | undefined) {
+    if (row?.kind === 'down') return row.asleep
+    return !!d.silent || !!d.wake?.verified
   }
 
   /** Classes for the row, which set the status dot. */
@@ -476,9 +519,9 @@
 
 <main>
   <header>
-    <h1>Devices</h1>
+    <h1 bind:this={heading} tabindex="-1">Your PCs</h1>
     {#if isDesktopApp}
-      <button class="link" onclick={onsettings}>Settings</button>
+      <button class="btn quiet" onclick={onsettings}><Icon name="settings" />Settings</button>
     {/if}
   </header>
 
@@ -486,14 +529,15 @@
   <div role="status">
     {#if share.any}
       <div class="shared">
+        <span class="shared-icon"><Icon name="file" /></span>
         <p>{sharedText()}</p>
-        <button class="link" onclick={() => share.dismiss()}>{share.files.length ? 'Don’t send' : 'OK'}</button>
+        <button class="btn quiet" onclick={() => share.dismiss()}>{share.files.length ? 'Don’t send' : 'OK'}</button>
       </div>
     {/if}
   </div>
 
   {#if askPc}
-    <form class="empty" onsubmit={findDevices}>
+    <form class="find-pc" onsubmit={findDevices}>
       <label for="pc-name">Enter the name of one of your PCs that runs Conductor, as the Tailscale app shows it.</label>
       <div class="find">
         <input
@@ -506,7 +550,7 @@
           enterkeyhint="go"
           aria-describedby={pcProblem ? 'pc-problem' : undefined}
         />
-        <button class="btn primary" disabled={finding}>{finding ? 'Finding…' : 'Find devices'}</button>
+        <button class="btn primary" disabled={finding}>{finding ? 'Finding…' : 'Find PCs'}</button>
       </div>
       {#if pcProblem}
         <div class="problem" id="pc-problem" role="alert">
@@ -520,15 +564,15 @@
       <div class="buttons">
         <button class="btn" onclick={retry}>Try again</button>
         {#if isPhoneApp}
-          <button class="link" onclick={usePc}>Use another PC</button>
+          <button class="btn quiet" onclick={usePc}>Use another PC</button>
         {/if}
       </div>
     </div>
   {:else if list === null}
-    <p class="quiet">Looking for your devices…</p>
+    <p class="quiet">Looking for your PCs…</p>
   {:else if list.length === 0}
     <div class="empty">
-      <p class="quiet">Install Conductor on a Windows PC signed in to this Tailscale account to see it here.</p>
+      <p>Install Conductor on a Windows PC signed in to this Tailscale account to see it here.</p>
       <button class="btn" onclick={retry}>Check again</button>
     </div>
   {:else}
@@ -536,79 +580,136 @@
       {#each list as d (d.id)}
         {@const row = rows[d.id]}
         {@const waker = wakeable(d, row)}
-        {@const preview = availability(d) === 'ready' && row?.kind !== 'down' ? previews[d.id] : undefined}
+        {@const on = availability(d) === 'ready' && row?.kind !== 'down'}
+        {@const preview = on ? previews[d.id] : undefined}
+        {@const osd = row?.kind === 'busy' || row?.kind === 'confirm'}
+        {@const map = on && !preview && !osd && d.host ? arrangement(d.host.displays) : null}
+        {@const connectable = on && !waker && !osd && row?.kind !== 'schedule'}
+        {@const powered = connectable && !!d.host?.wake}
         <li class={rowClass(d, row)} data-row={d.id} tabindex="-1">
-          <!-- What's on its main display, or blank like a screen that's off. -->
-          <div class="screen" aria-hidden="true">
-            {#if preview}<img src={preview} alt="" />{/if}
-          </div>
-          <div class="device">
-            <span class="name">{d.name}</span>
-            <span class="meta" class:problem={row?.kind === 'note' && row.problem} aria-live="polite">
-              <span class="status" aria-hidden="true"></span>
-              <span>{describe(d, row)}</span>
-            </span>
-          </div>
-          <div class="actions">
-            {#if row?.kind === 'busy' || row?.kind === 'confirm' || row?.kind === 'schedule'}
-              <!-- The row says what's going on. -->
-            {:else if waker}
-              <button class="btn primary" aria-label="Wake {d.name}" onclick={() => start(d, () => runWake(d))}>Wake</button>
-            {:else if d.host && row?.kind !== 'down'}
-              <button
-                class="btn primary"
-                aria-label="Connect to {d.name}"
-                onclick={() => onconnect({ url: deviceUrl(d), info: d.host! })}
-              >
-                Connect
-              </button>
-              {#if d.host.wake}
-                <div class="more">
-                  <button
-                    class="btn icon"
-                    data-more={d.id}
-                    aria-haspopup="menu"
-                    aria-expanded={menuFor === d.id}
-                    aria-label="More for {d.name}"
-                    onclick={() => toggleMenu(d)}
+          <!-- A larger place to click. The keyboard and screen readers use the Connect button below. -->
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+          <div
+            class="screen"
+            class:connectable
+            onclick={(e) => {
+              // Not a button or menu on the screen, which can make it connectable by the time the click gets here.
+              if (!connectable || (e.target as Element).closest('button, [role="menu"]')) return
+              onconnect({ url: deviceUrl(d), info: d.host! })
+            }}
+            oncontextmenu={(e) => {
+              if (!powered) return
+              e.preventDefault()
+              toggleMenu(d)
+            }}
+          >
+            {#if preview}
+              <div class="picture" class:dim={osd} aria-hidden="true"><img src={preview} alt="" /></div>
+            {:else if map}
+              <!-- Its screen isn't shared, so this draws how its displays are arranged. -->
+              <svg class="map" viewBox="0 0 {map.width} {map.height}" aria-hidden="true">
+                {#each map.rects as r, i (i)}
+                  <rect
+                    x={r.x}
+                    y={r.y}
+                    width={r.width}
+                    height={r.height}
+                    class:primary={r.primary}
+                    vector-effect="non-scaling-stroke"
+                  />
+                {/each}
+              </svg>
+            {:else if !osd && (row?.kind === 'down' || availability(d) === 'offline')}
+              <!-- Like the light on a monitor that's asleep or off. -->
+              <span class="standby" aria-hidden="true"><Icon name={asleep(d, row) ? 'sleep' : 'power'} /></span>
+            {/if}
+            {#if powered && d.host}
+              <div class="more">
+                <button
+                  class="power"
+                  data-more={d.id}
+                  aria-haspopup="menu"
+                  aria-expanded={menuFor === d.id}
+                  aria-label="Power options for {d.name}"
+                  onclick={() => toggleMenu(d)}
+                >
+                  <Icon name="power" />
+                </button>
+                {#if menuFor === d.id}
+                  <div
+                    class="menu"
+                    role="menu"
+                    tabindex="-1"
+                    aria-label="Power options for {d.name}"
+                    data-menu={d.id}
+                    onkeydown={(e) => onMenuKey(e, d)}
                   >
-                    <Icon name="more" />
-                  </button>
-                  {#if menuFor === d.id}
-                    <div
-                      class="menu"
-                      role="menu"
-                      tabindex="-1"
-                      aria-label="More for {d.name}"
-                      data-menu={d.id}
-                      onkeydown={(e) => onMenuKey(e, d)}
-                    >
-                      <button role="menuitem" tabindex="-1" onclick={() => ask(d, 'sleep')}>Sleep</button>
-                      <button role="menuitem" tabindex="-1" onclick={() => ask(d, 'restart')}>Restart</button>
-                      <button role="menuitem" tabindex="-1" onclick={() => ask(d, 'shutDown')}>Shut down</button>
-                      {#if d.host.schedule}
-                        <button role="menuitem" tabindex="-1" onclick={() => openSchedule(d)}>Schedule</button>
-                      {/if}
-                      {#if canTestWake(d)}
-                        <button role="menuitem" tabindex="-1" onclick={() => ask(d, 'testWake')}>Test waking</button>
-                      {/if}
-                    </div>
-                  {/if}
+                    <button role="menuitem" tabindex="-1" onclick={() => ask(d, 'sleep')}>
+                      <Icon name="sleep" />Sleep
+                    </button>
+                    <button role="menuitem" tabindex="-1" onclick={() => ask(d, 'restart')}>
+                      <Icon name="restart" />Restart
+                    </button>
+                    <button role="menuitem" tabindex="-1" onclick={() => ask(d, 'shutDown')}>
+                      <Icon name="power" />Shut down
+                    </button>
+                    {#if d.host.schedule || canTestWake(d)}
+                      <div class="separator" role="separator"></div>
+                    {/if}
+                    {#if d.host.schedule}
+                      <button role="menuitem" tabindex="-1" onclick={() => openSchedule(d)}>
+                        <Icon name="clock" />Schedule
+                      </button>
+                    {/if}
+                    {#if canTestWake(d)}
+                      <button role="menuitem" tabindex="-1" onclick={() => ask(d, 'testWake')}>
+                        <Icon name="wake" />Test waking
+                      </button>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+            {#if row?.kind === 'busy'}
+              <p class="osd" aria-hidden="true">{row.text}</p>
+            {:else if row?.kind === 'confirm'}
+              {@const action = row.action}
+              {@const onkeydown = (e: KeyboardEvent) => e.key === 'Escape' && cancel(d)}
+              <div class="osd confirm" role="group" aria-labelledby="ask-{d.id}" data-confirm={d.id}>
+                <p id="ask-{d.id}">{question(d, action)}</p>
+                <div class="buttons">
+                  <button class="btn primary" {onkeydown} onclick={() => go(d, action)}>{labels[action]}</button>
+                  <button class="btn" {onkeydown} onclick={() => cancel(d)}>Cancel</button>
                 </div>
-              {/if}
+              </div>
             {/if}
           </div>
-          {#if row?.kind === 'confirm'}
-            {@const action = row.action}
-            {@const onkeydown = (e: KeyboardEvent) => e.key === 'Escape' && cancel(d)}
-            <div class="confirm" role="group" aria-labelledby="ask-{d.id}" data-confirm={d.id}>
-              <p id="ask-{d.id}">{question(d, action)}</p>
-              <div class="buttons">
-                <button class="btn primary" {onkeydown} onclick={() => go(d, action)}>{labels[action]}</button>
-                <button class="btn" {onkeydown} onclick={() => cancel(d)}>Cancel</button>
-              </div>
+          <div class="plate">
+            <div class="device">
+              <span class="name">{d.name}</span>
+              <span class="meta" class:problem={row?.kind === 'note' && row.problem} aria-live="polite">
+                <span class="status" aria-hidden="true"></span>
+                <span>{describe(d, row)}</span>
+              </span>
             </div>
-          {/if}
+            <div class="actions">
+              {#if row?.kind === 'busy' || row?.kind === 'confirm' || row?.kind === 'schedule'}
+                <!-- The screen says what's going on. -->
+              {:else if waker}
+                <button class="btn" aria-label="Wake {d.name}" onclick={() => start(d, () => runWake(d))}>
+                  Wake
+                </button>
+              {:else if d.host && row?.kind !== 'down'}
+                <button
+                  class="btn"
+                  aria-label="Connect to {d.name}"
+                  onclick={() => onconnect({ url: deviceUrl(d), info: d.host! })}
+                >
+                  Connect
+                </button>
+              {/if}
+            </div>
+          </div>
           {#if row?.kind === 'schedule' && d.host}
             <Schedule
               id={d.id}
@@ -627,84 +728,257 @@
 
 <style>
   main {
-    padding: var(--space-6);
-    padding-top: max(var(--space-6), env(safe-area-inset-top));
+    padding: var(--space-8);
+    padding-top: max(var(--space-8), env(safe-area-inset-top));
   }
 
   header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: var(--space-2);
+    gap: var(--space-4);
+    margin-bottom: var(--space-6);
   }
 
   h1 {
     margin: 0;
-    font-size: var(--text-md);
-    font-weight: 600;
+    font-family: var(--font-name);
+    font-size: var(--text-title);
+    font-stretch: 88%;
+    font-weight: 650;
+    line-height: 1.15;
+  }
+
+  h1:focus {
+    outline: none;
+  }
+
+  header .btn {
+    margin-right: calc(-1 * var(--space-3));
     color: var(--text-muted);
+  }
+
+  header .btn:hover {
+    color: var(--text);
   }
 
   .shared {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: var(--space-4);
-    max-width: 64ch;
-    margin-bottom: var(--space-4);
-    padding: var(--space-3) var(--space-4);
-    border-radius: var(--radius-sm);
+    gap: var(--space-3);
+    max-width: 72ch;
+    margin-bottom: var(--space-6);
+    padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+    border-radius: var(--radius);
     background: var(--surface);
-    box-shadow: inset 3px 0 0 var(--accent);
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+
+  .shared-icon {
+    color: var(--text-muted);
   }
 
   .shared p {
+    flex: 1;
     margin: 0;
     min-width: 0;
     overflow-wrap: anywhere;
   }
 
-  .shared .link {
+  .shared .btn {
     flex: none;
   }
 
   .quiet {
     margin: 0;
-    max-width: 56ch;
     color: var(--text-muted);
   }
 
   .devices {
-    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
+    gap: var(--space-8) var(--space-6);
     margin: 0;
     padding: 0;
-    border-top: 1px solid var(--border);
+    list-style: none;
   }
 
   li {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    align-items: center;
-    column-gap: var(--space-4);
-    row-gap: var(--space-3);
-    min-height: 64px;
-    padding: var(--space-3) 0;
-    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-width: 0;
+    border-radius: var(--radius);
   }
 
+  li:focus-visible {
+    outline-offset: var(--space-2);
+  }
+
+  /* The PC's screen, dark like a monitor's glass in both themes. */
   .screen {
-    width: 80px;
+    position: relative;
+    display: grid;
+    place-items: center;
     aspect-ratio: 16 / 10;
-    overflow: hidden;
-    border-radius: 4px;
-    background: var(--border);
+    border-radius: var(--radius);
+    background: var(--glass);
+    box-shadow: inset 0 0 0 1px var(--glass-edge);
+    color: var(--overlay-text);
   }
 
-  .screen img {
+  .screen.connectable {
+    cursor: pointer;
+  }
+
+  .screen.connectable:hover:not(:has(.more:hover)) {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  .picture {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    border-radius: inherit;
+  }
+
+  .picture img {
     display: block;
     width: 100%;
     height: 100%;
     object-fit: cover;
+  }
+
+  .picture.dim img {
+    filter: brightness(0.3);
+  }
+
+  .map {
+    position: absolute;
+    top: 22%;
+    left: 20%;
+    width: 60%;
+    height: 56%;
+    overflow: visible;
+  }
+
+  .map rect {
+    fill: none;
+    stroke: var(--glass-text);
+    stroke-opacity: 0.4;
+    stroke-width: 1.5px;
+  }
+
+  .map rect.primary {
+    fill: var(--glass-text);
+    fill-opacity: 0.07;
+    stroke-opacity: 0.75;
+  }
+
+  .standby {
+    color: var(--glass-text);
+    opacity: 0.35;
+  }
+
+  .standby :global(svg) {
+    width: 24px;
+    height: 24px;
+  }
+
+  /* Written on the screen, like a monitor's own messages. */
+  .osd {
+    position: relative;
+    margin: 0;
+    padding: var(--space-4) var(--space-6);
+    color: var(--overlay-text);
+    text-align: center;
+  }
+
+  .confirm {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    color: var(--overlay-text);
+  }
+
+  .confirm p {
+    margin: 0;
+    max-width: 44ch;
+  }
+
+  .confirm .buttons {
+    justify-content: center;
+  }
+
+  .confirm .btn.primary {
+    background: var(--overlay-accent);
+    color: var(--overlay-accent-text);
+  }
+
+  .confirm .btn.primary:hover {
+    background: var(--overlay-accent-hover);
+  }
+
+  .confirm .btn:not(.primary) {
+    border-color: var(--overlay-border-strong);
+    background: transparent;
+    color: var(--overlay-text);
+  }
+
+  .confirm .btn:not(.primary):hover {
+    background: var(--overlay-hover);
+  }
+
+  .confirm :focus-visible {
+    outline-color: var(--overlay-accent);
+  }
+
+  /* The label under the screen. */
+  .plate {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding-inline: 2px;
+  }
+
+  .device {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .name {
+    overflow: hidden;
+    font-family: var(--font-name);
+    font-size: var(--text-name);
+    font-stretch: 88%;
+    font-weight: 600;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .offline .name,
+  .asleep .name,
+  .not-running .name {
+    color: var(--text-muted);
+  }
+
+  .meta {
+    display: flex;
+    gap: 6px;
+    font-size: 13px;
+    line-height: 18px;
+    color: var(--text-muted);
+  }
+
+  .meta.problem {
+    color: var(--status-error);
   }
 
   .status {
@@ -746,76 +1020,73 @@
     }
   }
 
-  .device {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-  }
-
-  .name {
-    font-family: var(--font-display);
-    font-size: var(--text-lg);
-    font-weight: 600;
-    line-height: 1.25;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .offline .name,
-  .asleep .name,
-  .not-running .name {
-    color: var(--text-muted);
-  }
-
-  .meta {
-    display: flex;
-    gap: 6px;
-    font-size: var(--text-sm);
-    line-height: 18px;
-    color: var(--text-muted);
-  }
-
-  .meta.problem {
-    color: var(--status-error);
-  }
-
   .actions {
+    flex: none;
     display: flex;
-    gap: var(--space-2);
+    align-items: center;
+    gap: var(--space-1);
   }
 
-  .btn.icon {
-    width: 36px;
-    padding: 0;
-  }
-
+  /* In the corner of the screen, like a monitor's power button. */
   .more {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
+  }
+
+  .power {
     position: relative;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--overlay-border);
+    border-radius: var(--radius-sm);
+    background: rgb(0 0 0 / 45%);
+    color: var(--overlay-text);
+    cursor: pointer;
+  }
+
+  .power:hover,
+  .power[aria-expanded='true'] {
+    background: var(--overlay-bg-hover);
+  }
+
+  .power:focus-visible {
+    outline-color: var(--overlay-accent);
   }
 
   .menu {
     position: absolute;
     top: calc(100% + var(--space-1));
     right: 0;
-    z-index: 1;
+    z-index: 2;
     display: flex;
     flex-direction: column;
-    min-width: 168px;
+    min-width: 200px;
     padding: var(--space-1);
-    border: 1px solid var(--border);
     border-radius: var(--radius);
     background: var(--surface);
+    box-shadow: var(--shadow-float);
+    color: var(--text);
   }
 
   .menu button {
-    min-height: 36px;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: 34px;
     padding: 0 var(--space-3);
     border: 0;
     border-radius: var(--radius-sm);
     background: none;
     text-align: left;
     cursor: pointer;
+  }
+
+  .menu button :global(svg) {
+    color: var(--text-muted);
   }
 
   .menu button:hover,
@@ -827,27 +1098,21 @@
     outline-offset: -2px;
   }
 
-  .confirm {
-    grid-column: 2 / -1;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-3);
-  }
-
-  .confirm p {
-    margin: 0;
-    max-width: 60ch;
+  .separator {
+    height: 1px;
+    margin: var(--space-1) calc(-1 * var(--space-1));
+    background: var(--border);
   }
 
   .buttons {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-2);
   }
 
   .problem,
-  .empty {
+  .empty,
+  .find-pc {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
@@ -855,15 +1120,8 @@
     max-width: 52ch;
   }
 
-  .problem p,
   .empty p {
     margin: 0;
-  }
-
-  .problem .buttons {
-    display: flex;
-    align-items: center;
-    gap: var(--space-4);
   }
 
   .find {
@@ -877,20 +1135,28 @@
     min-width: 0;
     min-height: 36px;
     padding: 0 var(--space-3);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-control);
     border-radius: var(--radius-sm);
     background: var(--surface);
+    color: inherit;
+    font: inherit;
+  }
+
+  input:focus-visible {
+    border-color: var(--focus);
+    outline-offset: 0;
   }
 
   @media (pointer: coarse) {
     input {
       min-height: var(--touch-target);
     }
-  }
 
-  @media (pointer: coarse) {
-    .btn.icon {
-      width: var(--touch-target);
+    /* A larger place to touch without covering more of the screen. */
+    .power::after {
+      content: '';
+      position: absolute;
+      inset: -10px;
     }
 
     .menu button {
@@ -898,17 +1164,58 @@
     }
   }
 
-  @media (max-width: 480px) {
+  @media (max-width: 560px) {
     main {
-      padding-inline: var(--space-4);
+      padding: var(--space-6) var(--space-4);
+      padding-top: max(var(--space-6), env(safe-area-inset-top));
+    }
+
+    /* Rows: a small screen beside its label, so a phone shows several PCs at once. */
+    .devices {
+      gap: var(--space-4);
     }
 
     li {
-      column-gap: var(--space-3);
+      display: grid;
+      grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+      align-items: center;
+      gap: var(--space-3);
     }
 
     .screen {
-      width: 64px;
+      border-radius: var(--radius-sm);
+    }
+
+    /* Out over the label: the small screen is narrower than the menu. */
+    .menu {
+      right: auto;
+      left: 0;
+    }
+
+    /* A question needs the whole width. */
+    li:has(.confirm) .screen {
+      grid-column: 1 / -1;
+    }
+
+    .plate {
+      flex-direction: column;
+      align-items: stretch;
+      gap: var(--space-2);
+    }
+
+    .standby :global(svg) {
+      width: 20px;
+      height: 20px;
+    }
+
+    .osd {
+      padding: var(--space-2);
+      font-size: var(--text-sm);
+    }
+
+    .confirm {
+      padding: var(--space-4);
+      font-size: var(--text-md);
     }
   }
 </style>

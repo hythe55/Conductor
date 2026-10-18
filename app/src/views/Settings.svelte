@@ -121,13 +121,14 @@
 </script>
 
 <main>
-  <button class="link" aria-label="Back to devices" onclick={onback}><Icon name="back" />Devices</button>
+  <button class="btn quiet back" aria-label="Back to your PCs" onclick={onback}><Icon name="back" />Your PCs</button>
   <h1>Settings</h1>
 
   <section aria-labelledby="this-pc">
     <h2 id="this-pc">This PC</h2>
     <div class="group">
       <div class="row">
+        <span class="lead"><Icon name="display" /></span>
         <div class="text">
           <span class="label" id="hosting-label">Let my other devices control this PC</span>
           <span class="note" id="hosting-note">{hostingNote}</span>
@@ -143,6 +144,7 @@
       </div>
       {#if status?.hosting && status.previews !== undefined}
         <div class="row">
+          <span class="lead"><Icon name="eye" /></span>
           <div class="text">
             <span class="label" id="previews-label">Show a preview of this screen on my other devices</span>
             <span class="note" id="previews-note">Updated every 30 seconds while a device list is open. Nothing shows on this PC when it’s taken.</span>
@@ -165,6 +167,7 @@
       <h2 id="updates">Updates</h2>
       <div class="group">
         <div class="row">
+          <span class="lead"><Icon name="update" /></span>
           <div class="text">
             <div class="text" id="update-status" aria-live="polite">
               {#if update.state === 'checking'}
@@ -193,17 +196,20 @@
               aria-describedby="update-status"
               onclick={() => runUpdate(installUpdate, 'Couldn’t start the update.')}>Install now</button
             >
-          {:else if update.state !== 'installing' && update.state !== 'checking'}
+          {:else if update.state !== 'installing'}
+            <!-- Stays while it checks, unavailable rather than disabled, so it keeps the focus. -->
             <button
               class="btn"
-              disabled={updateBusy}
+              aria-disabled={updateBusy || update.state === 'checking'}
               aria-describedby="update-status"
-              onclick={() => runUpdate(checkForUpdates, 'Couldn’t check for updates.')}
-              >{update.state === 'failed' ? 'Check again' : 'Check for updates'}</button
+              onclick={() => {
+                if (!updateBusy && update.state !== 'checking') runUpdate(checkForUpdates, 'Couldn’t check for updates.')
+              }}>{update.state === 'failed' ? 'Check again' : 'Check for updates'}</button
             >
           {/if}
         </div>
         <div class="row">
+          <span class="lead"><Icon name="clock" /></span>
           <div class="text">
             <span class="label" id="auto-update-label">Install updates automatically</span>
             <span class="note" id="auto-update-note">Updates install when this app is closed and nobody is connected to this PC.</span>
@@ -225,6 +231,7 @@
     <h2 id="about">About</h2>
     <div class="group">
       <div class="row">
+        <span class="lead"><Icon name="info" /></span>
         <div class="text">
           <span class="label">Conductor {version}</span>
           <span class="note">Free and open source under the GPL-3.0 license.</span>
@@ -236,42 +243,67 @@
 
 <style>
   main {
-    padding: var(--space-6);
+    max-width: 840px;
+    padding: var(--space-6) var(--space-8) var(--space-8);
     padding-top: max(var(--space-6), env(safe-area-inset-top));
+  }
+
+  .back {
+    margin-left: calc(-1 * var(--space-3));
+    padding-inline: var(--space-2) var(--space-3);
+    color: var(--text-muted);
+  }
+
+  .back:hover {
+    color: var(--text);
   }
 
   h1 {
     margin: var(--space-2) 0 var(--space-6);
-    font-family: var(--font-display);
-    font-size: var(--text-lg);
-    font-weight: 600;
+    font-family: var(--font-name);
+    font-size: var(--text-title);
+    font-stretch: 88%;
+    font-weight: 650;
+    line-height: 1.15;
   }
 
   section + section {
-    margin-top: var(--space-8);
+    margin-top: var(--space-6);
   }
 
   h2 {
     margin: 0 0 var(--space-2);
     font-size: var(--text-md);
     font-weight: 600;
-    color: var(--text-muted);
   }
 
+  /* One panel per group, its settings divided by lines. */
   .group {
-    border-top: 1px solid var(--border);
+    overflow: hidden;
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-shadow: inset 0 0 0 1px var(--border);
   }
 
   .row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: var(--space-4);
-    padding: var(--space-3) 0;
-    border-bottom: 1px solid var(--border);
+    min-height: 64px;
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .row + .row {
+    border-top: 1px solid var(--border);
+  }
+
+  .lead {
+    flex: none;
+    color: var(--text-muted);
   }
 
   .text {
+    flex: 1;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -292,9 +324,14 @@
     flex: none;
   }
 
-  @media (max-width: 480px) {
+  @media (max-width: 560px) {
     main {
       padding-inline: var(--space-4);
+    }
+
+    .row {
+      padding-inline: var(--space-3);
+      gap: var(--space-3);
     }
   }
 </style>

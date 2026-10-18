@@ -4,6 +4,7 @@
   import { Problem, toProblem } from '../lib/errors'
   import { describe, EVERY_DAY, weekday, WEEKDAYS, WEEKENDS } from '../lib/schedule'
   import type { PowerAction, PowerSchedule } from '../lib/types'
+  import Icon from './Icon.svelte'
   import ProblemText from './ProblemText.svelte'
 
   let {
@@ -72,29 +73,36 @@
     document.getElementById(`schedule-done-${id}`)?.focus()
   }
 
-  function onkeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      onclose()
-    }
+  const icons = { sleep: 'sleep', restart: 'restart', shutDown: 'power' } as const
+
+  let dialog: HTMLDialogElement
+  $effect(() => {
+    dialog.showModal()
+  })
+
+  // Escape closes it.
+  function oncancel(e: Event) {
+    e.preventDefault()
+    onclose()
   }
 </script>
 
-<!-- Escape from any control inside closes it. -->
-<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<div class="schedule" role="group" aria-labelledby="schedule-{id}" {onkeydown}>
-  <p class="title" id="schedule-{id}">Schedule for {name}</p>
+<dialog bind:this={dialog} aria-labelledby="schedule-{id}" {oncancel}>
+  <h2 id="schedule-{id}">Schedule for {name}</h2>
+  <p class="quiet">If someone is using {name} at that time, it waits until they stop, for up to an hour.</p>
+
   {#if list.length}
     <ul>
       {#each list as s, i (describe(s))}
         <li>
-          <span>{describe(s)}</span>
-          <button class="link" aria-label="Remove: {describe(s)}" onclick={() => remove(i)}>Remove</button>
+          <span class="icon"><Icon name={icons[s.action]} /></span>
+          <span class="what">{describe(s)}</span>
+          <button class="btn quiet" aria-label="Remove: {describe(s)}" onclick={() => remove(i)}>Remove</button>
         </li>
       {/each}
     </ul>
   {:else}
-    <p class="quiet">Nothing is scheduled.</p>
+    <p class="nothing">Nothing is scheduled.</p>
   {/if}
 
   {#if list.length < MAX}
@@ -116,29 +124,40 @@
     <p class="quiet">That’s as many as a PC can have. Remove one to add another.</p>
   {/if}
 
-  <p class="quiet">If someone is using {name} at that time, it waits until they stop, for up to an hour.</p>
   {#if problem}<div class="problem" role="alert"><ProblemText {problem} /></div>{/if}
   <div class="buttons">
-    <button class="btn" id="schedule-done-{id}" onclick={onclose}>Done</button>
+    <button class="btn primary" id="schedule-done-{id}" onclick={onclose}>Done</button>
   </div>
-</div>
+</dialog>
 
 <style>
-  .schedule {
-    grid-column: 2 / -1;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--space-3);
+  dialog {
+    width: min(480px, calc(100vw - 2 * var(--space-4)));
+    max-height: calc(100dvh - 2 * var(--space-4));
+    overflow: auto;
+    padding: var(--space-6);
+    border: 0;
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    box-shadow: var(--shadow-float);
+    color: var(--text);
+  }
+
+  dialog::backdrop {
+    background: rgb(8 12 11 / 45%);
+  }
+
+  h2 {
+    margin: 0 0 var(--space-1);
+    font-family: var(--font-name);
+    font-size: var(--text-lg);
+    font-stretch: 88%;
+    font-weight: 650;
+    line-height: 1.25;
   }
 
   p {
     margin: 0;
-    max-width: 60ch;
-  }
-
-  .title {
-    font-weight: 600;
   }
 
   .quiet {
@@ -146,36 +165,64 @@
     font-size: var(--text-sm);
   }
 
+  .nothing {
+    margin: var(--space-4) 0;
+    color: var(--text-muted);
+  }
+
   ul {
-    list-style: none;
-    margin: 0;
+    margin: var(--space-4) 0;
     padding: 0;
-    width: 100%;
+    list-style: none;
+    border-top: 1px solid var(--border);
   }
 
   li {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: var(--space-4);
-    max-width: 60ch;
+    gap: var(--space-3);
+    min-height: 44px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .icon {
+    color: var(--text-muted);
+  }
+
+  .what {
+    flex: 1;
+    min-width: 0;
+  }
+
+  li .btn {
+    margin-right: calc(-1 * var(--space-3));
+    color: var(--text-muted);
+  }
+
+  li .btn:hover {
+    color: var(--text);
   }
 
   form {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
+    margin-bottom: var(--space-4);
   }
 
   select,
   input {
     min-height: 36px;
     padding: 0 var(--space-2);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-control);
     border-radius: var(--radius-sm);
-    background: var(--surface);
+    background: var(--bg);
     color: inherit;
     font: inherit;
+  }
+
+  select {
+    flex: 1 1 8em;
   }
 
   @media (pointer: coarse) {
@@ -186,11 +233,13 @@
   }
 
   .problem {
+    margin-bottom: var(--space-4);
     color: var(--status-error);
   }
 
   .buttons {
     display: flex;
+    justify-content: flex-end;
     gap: var(--space-2);
   }
 </style>

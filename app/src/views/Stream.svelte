@@ -551,7 +551,7 @@
       <ProblemText problem={error ?? new Problem(`Lost the connection to ${info.name}.`)} />
       <div class="actions">
         <button class="btn primary" onclick={retry}>Try again</button>
-        <button class="btn" onclick={onclose}>Back to devices</button>
+        <button class="btn" onclick={onclose}>Back to your PCs</button>
       </div>
     </div>
   {:else if error && !hasVideo}

@@ -1,21 +1,32 @@
 :root {
   --font: 'Segoe UI Variable Text', 'Segoe UI', Roboto, system-ui, sans-serif;
   --font-display: 'Segoe UI Variable Display', 'Segoe UI', Roboto, system-ui, sans-serif;
+  /* Names of PCs and page titles, set semi-condensed like the label under a monitor. */
+  --font-name: 'Archivo Variable', var(--font-display);
 
-  --bg: #f3f3f2;
-  --surface: #ffffff;
-  --surface-hover: #ebebea;
-  --text: #1a1a1a;
-  --text-muted: #5f5f5f;
-  --border: #dfdfde;
-  --accent: #0b7a6e;
-  --accent-hover: #096659;
+  /* Neutrals lean toward the accent, a little green-blue. */
+  --bg: #eef1f0;
+  --surface: #fbfcfc;
+  --surface-hover: #e3e8e6;
+  --text: #141a19;
+  --text-muted: #56625f;
+  --border: #d3dad8;
+  /* Edges of fields, which need 3:1 against what's around them. */
+  --border-control: #869390;
+  --accent: #0a7a6c;
+  --accent-hover: #08665a;
   --accent-text: #ffffff;
-  --focus: #0b7a6e;
+  --focus: #0a7a6c;
+  /* A PC's screen: dark in both themes, like the glass of a monitor that's off. */
+  --glass: #131b1a;
+  --glass-edge: rgb(255 255 255 / 6%);
+  --glass-text: #c9d3d1;
+  /* Only for things that float over the page: menus and dialogs. */
+  --shadow-float: 0 1px 2px rgb(20 26 25 / 10%), 0 12px 32px rgb(20 26 25 / 16%);
 
-  --status-online: #2f8f55;
-  --status-asleep: #a66a12;
-  --status-offline: #858585;
+  --status-online: #23935a;
+  --status-asleep: #a8680f;
+  --status-offline: #77817f;
   --status-error: #b83a25;
 
   /* Session view: always dark, whatever the system theme. */
@@ -37,10 +48,13 @@
   --text-sm: 12px;
   --text-md: 14px;
   --text-lg: 20px;
+  --text-name: 18px;
+  --text-title: 28px;
   --touch-target: 48px;
 
   --radius-sm: 6px;
   --radius: 10px;
+  --radius-lg: 14px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -53,19 +67,23 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1f1f1f;
-    --surface: #2a2a2a;
-    --surface-hover: #333333;
-    --text: #ececec;
-    --text-muted: #a3a3a3;
-    --border: #3a3a3a;
+    --bg: #111514;
+    --surface: #1a201f;
+    --surface-hover: #232a29;
+    --text: #e5ebe9;
+    --text-muted: #97a3a0;
+    --border: #2b3533;
+    --border-control: #66716e;
     --accent: #4cc2ae;
     --accent-hover: #68d0bd;
     --accent-text: #062520;
     --focus: #4cc2ae;
+    --glass: #050807;
+    --glass-edge: rgb(255 255 255 / 9%);
+    --shadow-float: 0 0 0 1px #2b3533, 0 12px 32px rgb(0 0 0 / 50%);
     --status-online: #4cbb76;
     --status-asleep: #d69a3a;
-    --status-offline: #7d7d7d;
+    --status-offline: #6f7a77;
     --status-error: #e2644c;
   }
 }
@@ -123,6 +141,16 @@ button {
   background: var(--surface-hover);
 }
 
+/* A button that needs no box until it's pointed at, like Settings. */
+.btn.quiet {
+  border-color: transparent;
+  background: transparent;
+}
+
+.btn.quiet:hover {
+  background: var(--surface-hover);
+}
+
 .btn.primary {
   border-color: transparent;
   background: var(--accent);
@@ -134,7 +162,8 @@ button {
   background: var(--accent-hover);
 }
 
-.btn:disabled {
+.btn:disabled,
+.btn[aria-disabled='true'] {
   opacity: 0.5;
   cursor: default;
   pointer-events: none;
@@ -142,29 +171,6 @@ button {
 
 @media (pointer: coarse) {
   .btn {
-    min-height: var(--touch-target);
-  }
-}
-
-/* Text-style button used for navigation (Settings, back). */
-.link {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-height: 32px;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.link:hover {
-  color: var(--text);
-}
-
-@media (pointer: coarse) {
-  .link {
     min-height: var(--touch-target);
   }
 }
