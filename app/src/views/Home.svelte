@@ -8,11 +8,13 @@
   import {
     devicesFrom,
     devicesFromNearby,
+    installPhoneApp,
     isDesktopApp,
     isPhoneApp,
     knownPcs,
     listDevices,
     nearbyPcs,
+    newerPhoneApp,
   } from '../lib/platform'
   import { summary } from '../lib/schedule'
   import { share } from '../lib/share.svelte'
@@ -45,6 +47,24 @@
 
   /** Schedules just changed from here, by device ID, until the list has caught up. */
   let changedSchedules = $state.raw<Record<string, { schedule: PowerSchedule[]; at: number }>>({})
+
+  /** A newer phone app, and how updating to it is going. */
+  let phoneUpdate = $state<{ version: string; state: 'out' | 'downloading' | 'asked'; problem: Problem | null } | null>(
+    null,
+  )
+  if (isPhoneApp) newerPhoneApp().then((version) => version && (phoneUpdate = { version, state: 'out', problem: null }))
+
+  async function updatePhoneApp() {
+    if (!phoneUpdate) return
+    const { version } = phoneUpdate
+    phoneUpdate = { version, state: 'downloading', problem: null }
+    try {
+      await installPhoneApp(version)
+      phoneUpdate = { version, state: 'asked', problem: null }
+    } catch (e) {
+      phoneUpdate = { version, state: 'out', problem: toProblem(e, `Couldn’t download Conductor ${version}.`) }
+    }
+  }
 
   /** Pictures of PCs' screens, by device ID, as object URLs. */
   let previews = $state.raw<Record<string, string>>({})
@@ -588,6 +608,30 @@
         <button class="btn quiet" onclick={() => share.dismiss()}>{share.files.length ? 'Don’t send' : 'OK'}</button>
       </div>
     {/if}
+    {#if phoneUpdate}
+      <div class="shared update">
+        <span class="shared-icon"><Icon name="update" /></span>
+        <div class="update-text">
+          <p>
+            {#if phoneUpdate.state === 'downloading'}
+              Downloading Conductor {phoneUpdate.version}…
+            {:else if phoneUpdate.state === 'asked'}
+              Android will ask to install Conductor {phoneUpdate.version}. If it doesn’t, allow Conductor to install
+              apps, then try again.
+            {:else}
+              Conductor {phoneUpdate.version} is out.
+            {/if}
+          </p>
+          {#if phoneUpdate.problem}<ProblemText problem={phoneUpdate.problem} />{/if}
+        </div>
+        <div class="update-actions">
+          {#if phoneUpdate.state !== 'downloading'}
+            <button class="btn" onclick={updatePhoneApp}>{phoneUpdate.state === 'asked' ? 'Try again' : 'Update'}</button>
+          {/if}
+          <button class="btn quiet" onclick={() => (phoneUpdate = null)}>Not now</button>
+        </div>
+      </div>
+    {/if}
     {#if askPc && looking}
       <p class="quiet nearby-status">Looking for PCs on this Wi-Fi…</p>
     {:else if askPc && noneNearby}
@@ -856,6 +900,22 @@
     margin: 0;
     min-width: 0;
     overflow-wrap: anywhere;
+  }
+
+  /* On a phone, the buttons go under the text. */
+  .shared.update {
+    flex-wrap: wrap;
+  }
+
+  .update-text {
+    flex: 1 1 14rem;
+    min-width: 0;
+  }
+
+  .update-actions {
+    display: flex;
+    gap: var(--space-2);
+    margin-left: auto;
   }
 
   .shared .btn {

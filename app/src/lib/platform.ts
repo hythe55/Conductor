@@ -97,6 +97,63 @@ function allowLocalNetwork(): Promise<boolean> {
   })
 }
 
+/** Updating the phone app from its GitHub releases. See AppUpdate.kt. */
+interface AppUpdate {
+  version(): string
+  install(version: string): void
+}
+
+const appUpdate = (window as unknown as { ConductorUpdate?: AppUpdate }).ConductorUpdate
+
+let latest: Promise<string | null> | null = null
+
+/** A newer version of the phone app with an APK out, or null. Null anywhere but the phone app. Asked once a run. */
+export function newerPhoneApp(): Promise<string | null> {
+  latest ??= findNewerPhoneApp()
+  return latest
+}
+
+async function findNewerPhoneApp(): Promise<string | null> {
+  if (!appUpdate) return null
+  try {
+    const res = await fetch('https://api.github.com/repos/hythe55/Conductor/releases/latest', {
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!res.ok) return null
+    const release: { tag_name?: string; assets?: { name: string }[] } = await res.json()
+    const version = release.tag_name?.replace(/^v/, '') ?? ''
+    if (!/^\d+\.\d+\.\d+$/.test(version)) return null
+    // The phone app is added to a release a while after the PC app.
+    if (!release.assets?.some((a) => a.name === `Conductor_${version}_android-arm64.apk`)) return null
+    return isNewer(version, appUpdate.version()) ? version : null
+  } catch {
+    return null
+  }
+}
+
+function isNewer(version: string, than: string): boolean {
+  const a = version.split('.').map(Number)
+  const b = than.split('.').map(Number)
+  for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0)
+  return false
+}
+
+/** Downloads `version` of the phone app and opens Android's installer, which asks before installing. */
+export function installPhoneApp(version: string): Promise<void> {
+  const updater = appUpdate
+  if (!updater) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const heard = (e: Event) => {
+      window.removeEventListener('conductorupdate', heard)
+      const result = (e as CustomEvent<{ state: string; message?: string }>).detail
+      if (result.state === 'installing') resolve()
+      else reject(new Problem(`Couldn’t download Conductor ${version}.`, result.message))
+    }
+    window.addEventListener('conductorupdate', heard)
+    updater.install(version)
+  })
+}
+
 /** PCs that answer on the phone's Wi-Fi. None anywhere but the phone app. */
 export async function nearbyPcs(): Promise<NearbyPc[]> {
   if (!isPhoneApp) return []

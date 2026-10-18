@@ -14,6 +14,15 @@ class MainActivity : TauriActivity() {
     }
   }
   private val localNetwork by lazy { LocalNetwork(this) }
+  private val update by lazy {
+    AppUpdate(this) { json ->
+      runOnUiThread {
+        if (!isDestroyed) {
+          webView?.evaluateJavascript("window.dispatchEvent(new CustomEvent('conductorupdate', { detail: $json }))", null)
+        }
+      }
+    }
+  }
   private var webView: WebView? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -29,6 +38,7 @@ class MainActivity : TauriActivity() {
     this.webView = webView
     webView.addJavascriptInterface(files, "ConductorAndroid")
     webView.addJavascriptInterface(localNetwork, "ConductorNetwork")
+    webView.addJavascriptInterface(update, "ConductorUpdate")
   }
 
   override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
