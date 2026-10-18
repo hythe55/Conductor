@@ -51,8 +51,11 @@ enum Mode {
     Service,
     Install,
     Uninstall,
-    /// Prints the files on the clipboard; run as the user by the agent.
-    CopiedFiles,
+    /// Prints the files or picture on the clipboard; run as the user by the agent.
+    Copied,
+    /// Puts pasted files or a picture on the clipboard; run as the user by the agent.
+    PasteFiles(PathBuf),
+    PasteImage(PathBuf),
 }
 
 struct Args {
@@ -72,7 +75,9 @@ fn parse_args() -> Result<Args> {
             "service" => mode = Mode::Service,
             "install" => mode = Mode::Install,
             "uninstall" => mode = Mode::Uninstall,
-            "copied-files" => mode = Mode::CopiedFiles,
+            "copied" => mode = Mode::Copied,
+            "paste-files" => mode = Mode::PasteFiles(it.next().context("paste-files needs a folder")?.into()),
+            "paste-image" => mode = Mode::PasteImage(it.next().context("paste-image needs a file")?.into()),
             "--port" => port = it.next().context("--port needs a value")?.parse()?,
             "--web-dir" => web_dir = Some(PathBuf::from(it.next().context("--web-dir needs a value")?)),
             other => anyhow::bail!("unknown argument {other}"),
@@ -108,7 +113,12 @@ fn main() -> Result<()> {
             init_logging(None);
             install::uninstall()
         }
-        Mode::CopiedFiles => files::print_copied(),
+        Mode::Copied => files::print_copied(),
+        Mode::PasteFiles(ref path) | Mode::PasteImage(ref path) => {
+            files::put_on_clipboard(path, matches!(args.mode, Mode::PasteImage(_)))?;
+            println!("pasted");
+            Ok(())
+        }
         Mode::Service => {
             // Before anything is written there as SYSTEM.
             let secured = settings::secure_data_dir();

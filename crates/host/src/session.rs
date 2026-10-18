@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 use crate::audio::{self, Audio};
 use crate::cursor::Cursor;
 use crate::encoder::Profile;
-use crate::files::{Incoming, Outgoing};
+use crate::files::{Hidden, Incoming, Outgoing};
 use crate::indicator::{Area, Banner};
 use crate::power::KeepAwake;
 use crate::input::{Injector, Pen};
@@ -138,6 +138,16 @@ struct Session {
     cursor: Cursor,
     incoming: Incoming,
     outgoing: Outgoing,
+    /// Hears how putting pasted files or pictures on the clipboard went.
+    pasted_tx: mpsc::Sender<PasteDone>,
+}
+
+/// A paste that's on the clipboard, or failed to get there.
+struct PasteDone {
+    id: u32,
+    /// Press Ctrl+V once it's there.
+    keys: bool,
+    result: Result<()>,
 }
 
 /// Tells the session how the connection travels, whenever that changes, until the session ends.
@@ -165,6 +175,7 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params, mut route_rx: mpsc::Re
     let (sound_tx, mut sound_rx) = mpsc::channel(16);
     // Files copied on this PC, read as the signed-in user, with the clipboard sequence number they go with.
     let (hidden_tx, mut hidden_rx) = mpsc::channel(4);
+    let (pasted_tx, mut pasted_rx) = mpsc::channel(4);
     let mut s = Session {
         rtc,
         video: None,
@@ -195,6 +206,7 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params, mut route_rx: mpsc::Re
         cursor: Cursor::new(),
         incoming: Incoming::default(),
         outgoing: Outgoing::default(),
+        pasted_tx,
     };
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -298,15 +310,19 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params, mut route_rx: mpsc::Re
                     }
                 }
             }
-            Some((seen, files)) = hidden_rx.recv() => match files {
+            Some((seen, hidden)) = hidden_rx.recv() => match hidden {
                 // Unless something newer was copied meanwhile.
-                Ok(Some(paths)) if seen == s.clipboard.seen => {
-                    let msg = s.outgoing.offer(paths);
+                Ok(Some(hidden)) if seen == s.clipboard.seen => {
+                    let msg = match hidden {
+                        Hidden::Files(paths) => s.outgoing.offer(paths),
+                        Hidden::Image(png) => s.outgoing.offer_image(png),
+                    };
                     s.send(&msg);
                 }
                 Ok(_) => {}
-                Err(e) => tracing::warn!("reading copied files as the signed-in user: {e:#}"),
+                Err(e) => tracing::warn!("reading what was copied as the signed-in user: {e:#}"),
             },
+            Some(done) = pasted_rx.recv() => s.pasted(done),
             _ = tokio::time::sleep_until(timeout.into()) => {}
         }
     }
@@ -509,7 +525,45 @@ impl Session {
                     self.withdraw_files();
                 }
             }
+            ClientMsg::Paste { id, image, keys } => {
+                let Some(pasted) = self.incoming.take_paste(id) else {
+                    let message = Some("Nothing arrived to paste.".into());
+                    self.send(&HostMsg::Pasted { id, message });
+                    return;
+                };
+                // What goes on the clipboard now came from the client.
+                self.clipboard.pasting += 1;
+                let tx = self.pasted_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let result = crate::files::paste(&pasted, image);
+                    // The clipboard has its own copy of a picture; files stay until pasted.
+                    if image || result.is_err() {
+                        _ = std::fs::remove_dir_all(&pasted.folder);
+                    }
+                    _ = tx.blocking_send(PasteDone { id, keys, result });
+                });
+            }
         }
+    }
+
+    /// Something the client pasted is on this PC's clipboard, or failed to get there.
+    fn pasted(&mut self, done: PasteDone) {
+        self.clipboard.pasted();
+        let message = match done.result {
+            Ok(()) => {
+                tracing::info!("pasted from the client");
+                self.withdraw_files();
+                if done.keys {
+                    self.injector.paste();
+                }
+                None
+            }
+            Err(e) => {
+                tracing::warn!("putting what the client pasted on the clipboard: {e:#}");
+                Some(format!("{e:#}"))
+            }
+        };
+        self.send(&HostMsg::Pasted { id: done.id, message });
     }
 
     fn send(&mut self, msg: &HostMsg) {
@@ -652,19 +706,21 @@ struct SharedClipboard {
     shared: Option<String>,
     /// Failed reads of what's on the clipboard, by its sequence number.
     failures: (u32, u32),
+    /// Pastes from the client on their way onto the clipboard.
+    pasting: u32,
 }
 
 impl SharedClipboard {
     fn new() -> Self {
         // Only what's copied from now on is shared, not what was there before.
-        Self { seen: conductor_clipboard::sequence(), shared: None, failures: (0, 0) }
+        Self { seen: conductor_clipboard::sequence(), shared: None, failures: (0, 0), pasting: 0 }
     }
 
     /// What was copied on this PC since the last call, unless it's text the
     /// client already has.
     fn copied(&mut self) -> Option<Copied> {
         let now = conductor_clipboard::sequence();
-        if now == self.seen {
+        if now == self.seen || self.pasting > 0 {
             return None;
         }
         let read = conductor_clipboard::read_files().and_then(|files| match files {
@@ -705,6 +761,14 @@ impl SharedClipboard {
                 Some(other)
             }
         }
+    }
+
+    /// A paste from the client is on the clipboard, or failed to get there.
+    /// Either way, what's there now isn't news to the client.
+    fn pasted(&mut self) {
+        self.pasting = self.pasting.saturating_sub(1);
+        self.seen = conductor_clipboard::sequence();
+        self.shared = None;
     }
 
     /// Puts text copied on the client on this PC's clipboard. Returns whether

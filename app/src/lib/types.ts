@@ -42,6 +42,8 @@ export interface HostInfo {
   schedule?: PowerSchedule[]
   /** Takes `pen` messages, with pressure and tilt. From 0.1.11. */
   pen?: boolean
+  /** Takes pictures and files to paste, and `paste` messages. From 0.1.12. */
+  paste?: boolean
 }
 
 /** Something a PC does on its own at a set time, unless it's in use. */
@@ -132,6 +134,11 @@ export type ClientMsg =
   | { t: 'requestKeyframe' }
   | { t: 'setPaused'; paused: boolean }
   | { t: 'clipboard'; text: string }
+  /**
+   * Puts the files sent for paste `id` on the remote PC's clipboard, as a
+   * picture when `image` is set, then presses Ctrl+V there if `keys` is set.
+   */
+  | { t: 'paste'; id: number; image: boolean; keys: boolean }
   | { t: 'setAudio'; enabled: boolean }
   /** Cover the remote PC's displays so nobody there sees the session. Ends with it. */
   | { t: 'hideScreen'; hide: boolean }
@@ -146,8 +153,13 @@ export type HostMsg =
   | { t: 'clipboard'; text: string }
   | { t: 'cursor'; name: string }
   | { t: 'route'; route: Route }
-  /** Files copied on the host, fetched by `offer`. Empty when the clipboard no longer holds files. */
-  | { t: 'filesCopied'; offer: number; files: CopiedFile[]; folders: number }
+  /**
+   * Files copied on the host, fetched by `offer`. Empty when the clipboard no
+   * longer holds files. With `image`, the one file is a picture that was copied.
+   */
+  | { t: 'filesCopied'; offer: number; files: CopiedFile[]; folders: number; image?: boolean }
+  /** What was pasted is on the host's clipboard, or `message` says why not. */
+  | { t: 'pasted'; id: number; message?: string }
 
 /** How the connection travels over the tailnet. `region` names one of Tailscale's relay server regions. */
 export type Route = { kind: 'direct' } | { kind: 'peerRelay' } | { kind: 'relay'; region: string }

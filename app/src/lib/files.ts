@@ -39,13 +39,15 @@ export interface FileSink {
 
 /**
  * Sends one file. Resolves with the name the host saved it under. `progress`
- * is called with the bytes that have left this device so far.
+ * is called with the bytes that have left this device so far. A file sent
+ * for `paste` waits on the host to be pasted rather than going to Downloads.
  */
 export async function sendFile(
   channel: RTCDataChannel,
   file: Sendable,
   progress: (bytes: number) => void,
   signal: AbortSignal,
+  paste?: number,
 ): Promise<string> {
   if (signal.aborted) {
     channel.close()
@@ -79,7 +81,7 @@ export async function sendFile(
 
   try {
     if (channel.readyState !== 'open') await once('open')
-    channel.send(JSON.stringify({ name: file.name, size: file.size }))
+    channel.send(JSON.stringify({ name: file.name, size: file.size, paste }))
     while (read < file.size) {
       if (channel.bufferedAmount > QUEUED_MAX) await once('bufferedamountlow')
       const chunk = await until(file.slice(read, read + CHUNK).arrayBuffer())

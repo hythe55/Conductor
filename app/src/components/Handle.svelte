@@ -25,6 +25,8 @@
     saving: boolean
     /** How many files copied on the remote PC can be saved here. */
     copiedFiles: number
+    /** What was copied there is a picture. */
+    copiedImage: boolean
     displays: DisplayInfo[]
     activeDisplay: string
     /** The one window shown instead of the whole display. */
@@ -62,6 +64,7 @@
     sending,
     saving,
     copiedFiles,
+    copiedImage,
     displays,
     activeDisplay,
     shownWindow,
@@ -420,7 +423,9 @@
           {:else if copiedFiles}
             <button class="item" role="menuitem" tabindex="-1" onclick={() => run(onsavecopied)}>
               <span class="check"></span>
-              <span class="text">{copiedFiles === 1 ? 'Save copied file' : `Save ${copiedFiles} copied files`}</span>
+              <span class="text">
+                {copiedImage ? 'Save copied image' : copiedFiles === 1 ? 'Save copied file' : `Save ${copiedFiles} copied files`}
+              </span>
             </button>
           {/if}
           {#if canFullscreen}

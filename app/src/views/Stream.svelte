@@ -3,7 +3,7 @@
   import { Problem } from '../lib/errors'
   import { attachDesktopInput } from '../lib/input'
   import { RemoteSession, type SessionState, type Stats } from '../lib/session'
-  import { readClipboard, writeClipboard } from '../lib/platform'
+  import { readClipboard, stillHoldsImage, writeClipboard } from '../lib/platform'
   import { share } from '../lib/share.svelte'
   import { attachTouchInput } from '../lib/touch'
   import { Transfers } from '../lib/transfers.svelte'
@@ -72,6 +72,7 @@
   const transfers = new Transfers(
     (label) => session.openChannel(label),
     () => info.name,
+    (msg) => session.send(msg),
   )
   let dragging = $state(false)
   let dragDepth = 0
@@ -154,6 +155,14 @@
     notCopiedHere = (await writeClipboard(text)) ? null : text
   }
 
+  // Files and pictures pasted here go onto the remote PC's clipboard, and it pastes them itself.
+  async function pasteFiles(files: File[], folders: number, image: boolean) {
+    // A picture copied there and still on this device's clipboard is on both already.
+    if (image && transfers.imageCopiedHere && (await stillHoldsImage())) return false
+    transfers.paste(files, folders, image)
+    return true
+  }
+
   // Coming back to this window: whatever was copied meanwhile goes to the side that doesn't have it.
   async function syncClipboard() {
     if (notCopiedHere != null) await copyHere(notCopiedHere)
@@ -212,7 +221,9 @@
         } else if (msg.t === 'route') {
           onRoute(msg.route)
         } else if (msg.t === 'filesCopied') {
-          transfers.hostCopied(msg.offer, msg.files, msg.folders)
+          transfers.hostCopied(msg.offer, msg.files, msg.folders, !!msg.image)
+        } else if (msg.t === 'pasted') {
+          transfers.hostPasted(msg.id, msg.message)
         }
       },
       onOpen() {
@@ -263,6 +274,7 @@
     const detachDesktop = attachDesktopInput(surface, video, send, {
       localShortcut,
       onPaste: shareClipboard,
+      onPasteFiles: info.paste ? pasteFiles : undefined,
       pen: !!info.pen,
     })
     const detachTouch = attachTouchInput(surface, video, pointer, send, {
@@ -570,6 +582,7 @@
       sending={!!transfers.sending}
       saving={!!transfers.saving}
       copiedFiles={transfers.copied?.files.length ?? 0}
+      copiedImage={!!transfers.copied?.image}
       {displays}
       {activeDisplay}
       {shownWindow}

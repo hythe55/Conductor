@@ -28,6 +28,12 @@ export interface DesktopInputOptions {
   localShortcut(e: KeyboardEvent): boolean
   /** Gets this device's clipboard text when the user pastes, before the paste keys are sent. */
   onPaste?(text: string): void
+  /**
+   * Gets files or a picture the user pastes, and folders that came with them.
+   * Resolves true when it takes care of pasting them on the remote PC, so the
+   * paste keys aren't sent from here.
+   */
+  onPasteFiles?(files: File[], folders: number, image: boolean): boolean | Promise<boolean>
   /** The host takes pens, with their pressure and tilt. Otherwise a pen works as a mouse. */
   pen?: boolean
 }
@@ -45,6 +51,11 @@ function isPaste(e: KeyboardEvent) {
   return (e.ctrlKey && e.code === 'KeyV') || (e.shiftKey && !e.ctrlKey && e.code === 'Insert')
 }
 
+const isFolder = (i: DataTransferItem) => !!i.webkitGetAsEntry?.()?.isDirectory
+
+// Browsers name a picture pasted from the clipboard image.png, and a copied file by its own name.
+const isPicture = (f: File) => /^image\/(png|jpeg|gif|bmp|webp)$/.test(f.type) && /^image\.\w+$/.test(f.name)
+
 /** Mouse, pen, wheel and keyboard for desktop browsers and the desktop app. */
 export function attachDesktopInput(
   surface: HTMLElement,
@@ -56,24 +67,57 @@ export function attachDesktopInput(
   let frame = 0
   let wheelX = 0
   let wheelY = 0
-  // A paste key held back until the clipboard has been sent.
+  // A paste key held back until the clipboard has been sent, and whether it was let go meanwhile.
   let pendingPaste: string | null = null
+  let pasteReleased = false
   let pasteTimer: number | undefined
+  // Working out what to do with pasted files, so the key waits even once let go.
+  let deciding = false
+  // A paste key the remote PC presses itself, so letting go of it here isn't sent.
+  let swallowed: string | null = null
 
   const flushPaste = () => {
     clearTimeout(pasteTimer)
-    if (pendingPaste) send({ t: 'key', code: pendingPaste, down: true })
+    if (pendingPaste) {
+      send({ t: 'key', code: pendingPaste, down: true })
+      if (pasteReleased) send({ t: 'key', code: pendingPaste, down: false })
+    }
     pendingPaste = null
+    pasteReleased = false
+    deciding = false
   }
 
   // The browser reads the clipboard for a paste only if the key press goes through,
   // so let it through, take the text from the paste event, then send the keys.
   const onPasteEvent = (e: ClipboardEvent) => {
-    if (!pendingPaste) return
+    if (!pendingPaste || deciding) return
     e.preventDefault()
-    const text = e.clipboardData?.getData('text/plain')
-    if (text) opts.onPaste?.(text)
-    flushPaste()
+    const data = e.clipboardData
+    const text = data?.getData('text/plain')
+    const items = [...(data?.items ?? [])].filter((i) => i.kind === 'file')
+    if (text || !items.length || !opts.onPasteFiles) {
+      if (text) opts.onPaste?.(text)
+      return flushPaste()
+    }
+    const files = items
+      .filter((i) => !isFolder(i))
+      .map((i) => i.getAsFile())
+      .filter((f): f is File => !!f)
+    const folders = items.filter(isFolder).length
+    const image = files.length === 1 && !folders && isPicture(files[0])
+    clearTimeout(pasteTimer)
+    deciding = true
+    const code = pendingPaste
+    void Promise.resolve(opts.onPasteFiles(files, folders, image))
+      .catch(() => false)
+      .then((handled) => {
+        if (pendingPaste !== code) return
+        if (!handled) return flushPaste()
+        if (!pasteReleased) swallowed = code
+        pendingPaste = null
+        pasteReleased = false
+        deciding = false
+      })
   }
 
   const flushMove = () => {
@@ -152,14 +196,26 @@ export function attachDesktopInput(
   const onKey = (e: KeyboardEvent) => {
     if (opts.localShortcut(e)) return
     e.stopPropagation()
-    if (opts.onPaste && e.type === 'keydown' && isPaste(e)) {
+    if (swallowed === e.code) {
+      // Held down, it would paste again and again.
+      e.preventDefault()
+      if (e.type === 'keyup') swallowed = null
+      return
+    }
+    if (opts.onPaste && e.type === 'keydown' && isPaste(e) && !deciding) {
       flushPaste()
       pendingPaste = e.code
       pasteTimer = window.setTimeout(flushPaste, PASTE_WAIT_MS)
       return
     }
     e.preventDefault()
-    if (pendingPaste === e.code) flushPaste()
+    if (pendingPaste === e.code && e.type === 'keyup') {
+      if (deciding) {
+        pasteReleased = true
+        return
+      }
+      flushPaste()
+    }
     if (e.code && e.code !== 'Unidentified') {
       send({ t: 'key', code: e.code, down: e.type === 'keydown' })
     } else if (e.type === 'keydown' && e.key.length === 1) {

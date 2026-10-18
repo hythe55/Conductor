@@ -180,6 +180,19 @@ impl Injector {
         }
     }
 
+    /// Presses Ctrl+V, or only V while Ctrl is held already.
+    pub fn paste(&mut self) {
+        let ctrl = self.held_keys.contains("ControlLeft") || self.held_keys.contains("ControlRight");
+        if !ctrl {
+            self.key("ControlLeft", true);
+        }
+        self.key("KeyV", true);
+        self.key("KeyV", false);
+        if !ctrl {
+            self.key("ControlLeft", false);
+        }
+    }
+
     pub fn text(&self, text: &str) {
         let mut inputs = Vec::new();
         for unit in text.encode_utf16() {

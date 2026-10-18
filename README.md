@@ -7,7 +7,7 @@ Control your Windows PCs from your other devices, over your own [Tailscale](http
 - Works at the sign-in screen, the lock screen, and on UAC prompts
 - Hardware video encoding with low latency, and adapts to the connection
 - Sound from the PC you're controlling, even while its own speakers are muted
-- Copy and paste text between PCs, and send or save files, including files shared to the Android app from other apps
+- Copy and paste text, pictures and files between PCs, and send or save files, including files shared to the Android app from other apps
 - A small picture of each PC's screen in the device list, which each PC can turn off
 - Shows who's in control on the PC's screen, or covers the screen and turns off its keyboard and mouse so nobody at the PC sees or gets in the way of what you're doing
 - Sends nothing while nobody is watching, and nothing for sound while it's quiet

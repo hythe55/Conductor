@@ -143,6 +143,36 @@ export async function writeClipboard(text: string): Promise<boolean> {
   }
 }
 
+/** Whether pictures can be put on this device's clipboard. Browsers only allow it on https pages. */
+export const canCopyImages =
+  isDesktopApp || (window.isSecureContext && typeof ClipboardItem !== 'undefined' && !!navigator.clipboard?.write)
+
+// The clipboard's sequence number once Conductor last put a picture there, in the desktop app.
+let imageSequence: number | null = null
+
+/** Puts a PNG on this device's clipboard. Browsers only allow it while the page has focus. */
+export async function writeClipboardImage(png: Blob): Promise<boolean> {
+  try {
+    if (isDesktopApp) {
+      imageSequence = await invoke<number>('write_clipboard_image', new Uint8Array(await png.arrayBuffer()))
+    } else {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Nothing has been copied on this device since Conductor last put a picture there. Only known in the desktop app. */
+export async function stillHoldsImage(): Promise<boolean> {
+  if (!isDesktopApp || imageSequence == null) return false
+  return invoke<number>('clipboard_sequence').then(
+    (sequence) => sequence === imageSequence,
+    () => false,
+  )
+}
+
 /** Whether saved files go straight into the Downloads folder, rather than being downloaded. */
 export const savesToDownloads = isDesktopApp || (android?.savesToDownloads() ?? false)
 

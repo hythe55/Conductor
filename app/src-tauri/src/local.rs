@@ -5,6 +5,7 @@ use std::time::Duration;
 use conductor_proto::{CONTROL_PIPE, ControlRequest, ControlStatus, Device};
 use conductor_tailnet::WakeMemory;
 use serde::Serialize;
+use tauri::ipc::{InvokeBody, Request};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::windows::named_pipe::ClientOptions;
 
@@ -114,11 +115,36 @@ pub async fn read_clipboard() -> Option<String> {
         .flatten()
 }
 
+const COULDNT_COPY: &str = "Couldn't copy to this PC's clipboard.";
+
 /// Puts text copied on the PC being controlled on this PC's clipboard.
 #[tauri::command]
 pub async fn write_clipboard(text: String) -> Result<(), Problem> {
     tauri::async_runtime::spawn_blocking(move || conductor_clipboard::write_text(&text))
         .await
-        .map_err(|e| Problem::new("Couldn't copy to this PC's clipboard.", e))?
-        .map_err(|e| Problem::new("Couldn't copy to this PC's clipboard.", format!("{e:#}")))
+        .map_err(|e| Problem::new(COULDNT_COPY, e))?
+        .map_err(|e| Problem::new(COULDNT_COPY, format!("{e:#}")))
+}
+
+/// Puts a picture copied on the PC being controlled, a PNG in the request
+/// body, on this PC's clipboard. Returns the clipboard's sequence number
+/// afterwards, so the app can tell whether it's still there.
+#[tauri::command]
+pub async fn write_clipboard_image(request: Request<'_>) -> Result<u32, Problem> {
+    let InvokeBody::Raw(png) = request.body() else {
+        return Err(Problem::new(COULDNT_COPY, "the picture arrived as JSON"));
+    };
+    let png = png.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        conductor_clipboard::write_image(&png).map(|()| conductor_clipboard::sequence())
+    })
+    .await
+    .map_err(|e| Problem::new(COULDNT_COPY, e))?
+    .map_err(|e| Problem::new(COULDNT_COPY, format!("{e:#}")))
+}
+
+/// Changes whenever something new is copied on this PC.
+#[tauri::command]
+pub fn clipboard_sequence() -> u32 {
+    conductor_clipboard::sequence()
 }

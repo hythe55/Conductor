@@ -151,6 +151,7 @@ pub fn host_info(state: &AppState) -> HostInfo {
         preview: Settings::load().previews,
         schedule: Some(crate::schedule::load()),
         pen: true,
+        paste: true,
     }
 }
 

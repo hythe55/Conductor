@@ -40,6 +40,8 @@ pub fn run() {
         local::install_update,
         local::read_clipboard,
         local::write_clipboard,
+        local::write_clipboard_image,
+        local::clipboard_sequence,
         downloads::begin_save,
         downloads::write_save,
         downloads::end_save,

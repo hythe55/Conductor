@@ -1,7 +1,12 @@
 import { Problem, toProblem } from './errors'
-import { COPIED_CHANNEL, FILE_CHANNEL, HostError, receiveFile, sendFile, type Sendable } from './files'
-import { isPhoneApp, saveFile, savesToDownloads } from './platform'
-import type { CopiedFile } from './types'
+import { COPIED_CHANNEL, FILE_CHANNEL, HostError, receiveFile, sendFile, type FileSink, type Sendable } from './files'
+import { canCopyImages, isPhoneApp, saveFile, savesToDownloads, writeClipboardImage } from './platform'
+import type { ClientMsg, CopiedFile } from './types'
+
+/** Pictures copied on the remote PC up to this size go straight onto this device's clipboard. */
+const COPY_IMAGE_MAX = 16 * 1024 * 1024
+/** Something pasted that takes longer than this to get there isn't pasted, only put on the clipboard, as the user may have moved on. */
+const PASTE_KEYS_WITHIN_MS = 3000
 
 interface Progress {
   files: number
@@ -10,6 +15,22 @@ interface Progress {
   /** Bytes in all the files, and how many of them have moved. */
   total: number
   done: number
+  /** The file moving now is being pasted, rather than sent to Downloads. */
+  pasting: boolean
+}
+
+/** Files or a picture on their way to be pasted on the remote PC. */
+interface Paste {
+  id: number
+  image: boolean
+  started: number
+  /** Files not there yet. */
+  left: number
+}
+
+interface Queued {
+  file: Sendable
+  paste?: Paste
 }
 
 interface Failure {
@@ -18,14 +39,15 @@ interface Failure {
 }
 
 /**
- * Files sent to the Downloads folder on the remote PC, and files copied there
- * saved on this device. Each way moves one file at a time.
+ * Files sent to the Downloads folder on the remote PC or pasted there, and
+ * files and pictures copied there brought to this device. Each way moves one
+ * file at a time.
  */
 export class Transfers {
   sending = $state<Progress | null>(null)
   saving = $state<Progress | null>(null)
-  /** Files copied on the remote PC, which can be saved here. */
-  copied = $state<{ offer: number; files: CopiedFile[] } | null>(null)
+  /** Files or a picture copied on the remote PC, which can be saved here. */
+  copied = $state<{ offer: number; files: CopiedFile[]; image: boolean } | null>(null)
   /** Why the last transfer failed, explained in the session menu. */
   failure = $state<Failure | null>(null)
   /** Shown for a moment, such as how the last transfer ended. */
@@ -33,25 +55,43 @@ export class Transfers {
 
   #openChannel: (label: string) => RTCDataChannel | null
   #pc: () => string
-  #queue: Sendable[] = []
-  // Folders dropped with the files, which can't be sent.
+  #send: (msg: ClientMsg) => void
+  #queue: Queued[] = []
+  // Folders dropped or pasted with the files, which can't be sent.
   #skippedFolders = 0
   #stopSending: AbortController | null = null
   #stopSaving: AbortController | null = null
   #noteTimer: number | undefined
+  #lastPaste = 0
+  // Pastes the remote PC hasn't answered yet, and whether it presses the paste keys for each.
+  #pastes = new Map<number, boolean>()
+  // The latest picture copied on the remote PC, while it's brought here, and once it's on this device's clipboard.
+  #imageOffer = 0
+  #imageCopied = 0
+  #stopImage: AbortController | null = null
 
-  constructor(openChannel: (label: string) => RTCDataChannel | null, pc: () => string) {
+  constructor(
+    openChannel: (label: string) => RTCDataChannel | null,
+    pc: () => string,
+    send: (msg: ClientMsg) => void,
+  ) {
     this.#openChannel = openChannel
     this.#pc = pc
+    this.#send = send
   }
 
   /** What the session handle says about files, most important first. */
   get notice() {
     if (this.failure) return { ...this.failure, warning: true }
-    if (this.sending) return progressNotice('Sending', this.sending)
+    if (this.sending) return progressNotice(this.sending.pasting ? 'Pasting' : 'Sending', this.sending)
     if (this.saving) return progressNotice('Saving', this.saving)
     if (this.note) return { chip: this.note }
     return null
+  }
+
+  /** The picture copied on the remote PC is on this device's clipboard too. */
+  get imageCopiedHere() {
+    return !!this.copied?.image && this.copied.offer === this.#imageCopied
   }
 
   /** Sends files to the Downloads folder on the remote PC, after any already on their way. */
@@ -65,13 +105,32 @@ export class Transfers {
       }
       return
     }
-    this.#queue.push(...files)
-    const size = files.reduce((n, f) => n + f.size, 0)
+    this.#enqueue(files.map((file) => ({ file })))
+  }
+
+  /**
+   * Puts files or a picture on the remote PC's clipboard, after anything
+   * already on its way, and pastes them there if they get there quickly.
+   */
+  paste(files: Sendable[], folders: number, image: boolean) {
+    this.#clear()
+    if (!files.length) {
+      if (folders) this.failure = foldersNotPasted()
+      return
+    }
+    this.#skippedFolders += folders
+    const paste: Paste = { id: ++this.#lastPaste, image, started: performance.now(), left: files.length }
+    this.#enqueue(files.map((file) => ({ file, paste })))
+  }
+
+  #enqueue(items: Queued[]) {
+    this.#queue.push(...items)
+    const size = items.reduce((n, i) => n + i.file.size, 0)
     if (this.sending) {
-      this.sending.files += files.length
+      this.sending.files += items.length
       this.sending.total += size
     } else {
-      this.sending = { files: files.length, current: 1, total: size, done: 0 }
+      this.sending = { files: items.length, current: 1, total: size, done: 0, pasting: !!items[0].paste }
       void this.#sendQueue()
     }
   }
@@ -80,9 +139,29 @@ export class Transfers {
     this.#stopSending?.abort()
   }
 
-  /** Files were copied on the remote PC, or the files copied there no longer are. */
-  hostCopied(offer: number, files: CopiedFile[], folders: number) {
-    this.copied = files.length ? { offer, files } : null
+  /** The remote PC put what was pasted on its clipboard, or `message` says why it couldn't. */
+  hostPasted(id: number, message?: string) {
+    const keys = this.#pastes.get(id)
+    this.#pastes.delete(id)
+    if (message) {
+      this.failure = {
+        chip: 'Couldn’t paste',
+        problem: new Problem(`Couldn’t put what you pasted on the clipboard of ${this.#pc()}. Try pasting again.`, message),
+      }
+    } else if (keys === false && !this.failure) {
+      this.#showNote(`Copied to ${this.#pc()}. Paste there with Ctrl+V`)
+    }
+  }
+
+  /** Files or a picture were copied on the remote PC, or what was copied there no longer is. */
+  hostCopied(offer: number, files: CopiedFile[], folders: number, image = false) {
+    this.copied = files.length ? { offer, files, image } : null
+    this.#stopImage?.abort()
+    if (image && files.length === 1) {
+      if (canCopyImages && files[0].size <= COPY_IMAGE_MAX) void this.#copyImage(offer)
+      else this.#showNote('Image copied. Save it from the menu')
+      return
+    }
     const copied = files.length === 1 ? 'File copied' : `${files.length} files copied`
     if (files.length && folders) this.#showNote(`${copied}. Folders can’t be saved`)
     else if (files.length) this.#showNote(`${copied}. Save ${files.length === 1 ? 'it' : 'them'} from the menu`)
@@ -105,47 +184,69 @@ export class Transfers {
     this.#dropQueue()
     this.stopSending()
     this.stopSaving()
+    this.#stopImage?.abort()
     clearTimeout(this.#noteTimer)
   }
 
   async #sendQueue() {
     const stop = new AbortController()
     this.#stopSending = stop
-    // Bytes of the files already sent, and how many there were.
+    // Bytes of the files already sent, and how many there were, and how many went to Downloads.
     let before = 0
     let count = 0
-    let file: Sendable | undefined
+    let sent = 0
+    let item: Queued | undefined
     try {
-      while ((file = this.#queue.shift())) {
-        if (this.sending) this.sending.current = count + 1
+      while ((item = this.#queue.shift())) {
+        const { file, paste } = item
+        if (this.sending) {
+          this.sending.current = count + 1
+          this.sending.pasting = !!paste
+        }
         try {
           const channel = this.#openChannel(FILE_CHANNEL)
           if (!channel) throw new Problem(`Couldn’t send ${file.name}. ${this.#pc()} isn’t connected right now.`)
           const start = before
-          await sendFile(channel, file, (bytes) => this.sending && (this.sending.done = start + bytes), stop.signal)
+          const progress = (bytes: number) => this.sending && (this.sending.done = start + bytes)
+          await sendFile(channel, file, progress, stop.signal, paste?.id)
         } finally {
           file.close?.()
         }
         before += file.size
         count++
+        if (!paste) sent++
+        else if (--paste.left === 0) {
+          const keys = performance.now() - paste.started < PASTE_KEYS_WITHIN_MS
+          this.#pastes.set(paste.id, keys)
+          this.#send({ t: 'paste', id: paste.id, image: paste.image, keys })
+        }
       }
-      if (this.#skippedFolders) this.failure = { ...foldersNotSent(), chip: 'Sent to Downloads. Folders weren’t sent' }
-      else this.#showNote('Sent to Downloads')
+      if (this.#skippedFolders) {
+        this.failure = sent ? { ...foldersNotSent(), chip: 'Sent to Downloads. Folders weren’t sent' } : foldersNotPasted()
+      } else if (sent) {
+        this.#showNote('Sent to Downloads')
+      }
     } catch (e) {
       const rest = this.#queue.length
       const total = count + 1 + rest
       this.#dropQueue()
       if (stop.signal.aborted) {
         this.#showNote(stopped(count, total, 'sending', 'sent'))
-      } else if (file) {
+      } else if (item) {
+        const { file, paste } = item
         const after = notAfter(rest, 'sent')
-        const again = file.shared ? `To try again, share ${rest ? 'the files' : 'it'} again.` : 'Try sending again.'
+        const again = file.shared
+          ? `To try again, share ${rest ? 'the files' : 'it'} again.`
+          : paste
+            ? 'Try pasting again.'
+            : 'Try sending again.'
+        const what = paste?.image ? 'the picture' : file.name
         this.failure = {
-          chip: `Couldn’t send ${file.name}`,
+          chip: paste ? 'Couldn’t paste' : `Couldn’t send ${file.name}`,
           problem:
             e instanceof HostError
-              ? new Problem(`Couldn’t save ${file.name} on ${this.#pc()}.${after} ${again}`, e.message)
-              : toProblem(e, `Couldn’t send ${file.name} to ${this.#pc()}.${after} ${again}`),
+              ? new Problem(`Couldn’t save ${what} on ${this.#pc()}.${after} ${again}`, e.message)
+              : toProblem(e, `Couldn’t send ${what} to ${this.#pc()}.${after} ${again}`),
         }
       }
     } finally {
@@ -155,10 +256,36 @@ export class Transfers {
     }
   }
 
+  // Brings a picture copied on the remote PC onto this device's clipboard,
+  // or offers to save it when it can't go there.
+  async #copyImage(offer: number) {
+    const stop = new AbortController()
+    this.#stopImage = stop
+    this.#imageOffer = offer
+    const parts: ArrayBuffer[] = []
+    const memory: FileSink = {
+      write: async (data) => void parts.push(data),
+      finish: async () => '',
+      abort: async () => void parts.splice(0),
+    }
+    try {
+      const channel = this.#openChannel(COPIED_CHANNEL)
+      if (!channel) throw new Error('Not connected.')
+      await receiveFile(channel, { offer, index: 0 }, async () => memory, () => {}, stop.signal)
+      if (!(await writeClipboardImage(new Blob(parts, { type: 'image/png' })))) throw new Error('Not copied.')
+      this.#imageCopied = offer
+    } catch {
+      // Unless something newer was copied meanwhile.
+      if (!stop.signal.aborted && this.#imageOffer === offer) this.#showNote('Image copied. Save it from the menu')
+    } finally {
+      if (this.#stopImage === stop) this.#stopImage = null
+    }
+  }
+
   async #saveCopied(offer: number, files: CopiedFile[]) {
     const stop = new AbortController()
     this.#stopSaving = stop
-    this.saving = { files: files.length, current: 1, total: files.reduce((n, f) => n + f.size, 0), done: 0 }
+    this.saving = { files: files.length, current: 1, total: files.reduce((n, f) => n + f.size, 0), done: 0, pasting: false }
     // Bytes of the files already saved, and how many there were.
     let before = 0
     let index = 0
@@ -197,7 +324,7 @@ export class Transfers {
   }
 
   #dropQueue() {
-    for (const file of this.#queue) file.close?.()
+    for (const { file } of this.#queue) file.close?.()
     this.#queue = []
   }
 
@@ -217,7 +344,7 @@ export class Transfers {
 
 function progressNotice(verb: string, p: Progress) {
   return {
-    chip: p.files === 1 ? `${verb} file…` : `${verb} file ${p.current} of ${p.files}…`,
+    chip: p.files === 1 ? (p.pasting ? 'Pasting…' : `${verb} file…`) : `${verb} file ${p.current} of ${p.files}…`,
     progress: p.total ? Math.floor((p.done / p.total) * 100) : 0,
   }
 }
@@ -239,4 +366,9 @@ const capitalize = (s: string) => s[0].toUpperCase() + s.slice(1)
 const foldersNotSent = (): Failure => ({
   chip: 'Folders weren’t sent',
   problem: new Problem('To send a folder, zip it first or send the files in it.'),
+})
+
+const foldersNotPasted = (): Failure => ({
+  chip: 'Folders weren’t pasted',
+  problem: new Problem('To paste a folder, zip it first or copy the files in it.'),
 })

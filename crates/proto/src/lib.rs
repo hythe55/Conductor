@@ -101,6 +101,10 @@ pub struct HostInfo {
     /// Takes [`ClientMsg::Pen`]. Hosts from 0.1.11.
     #[serde(default)]
     pub pen: bool,
+    /// Takes pictures and files to paste: [`FileHeader::paste`] and
+    /// [`ClientMsg::Paste`]. Hosts from 0.1.12.
+    #[serde(default)]
+    pub paste: bool,
 }
 
 /// Something a PC does on its own at a set time, unless it's in use.
@@ -346,6 +350,18 @@ pub enum ClientMsg {
     /// Text copied on the client, to put on this PC's clipboard.
     #[serde(rename_all = "camelCase")]
     Clipboard { text: String },
+    /// Puts what arrived on file channels for paste `id` on this PC's
+    /// clipboard, then presses Ctrl+V when `keys` is set. Answered with
+    /// [`HostMsg::Pasted`]. Only sent to hosts with [`HostInfo::paste`].
+    #[serde(rename_all = "camelCase")]
+    Paste {
+        id: u32,
+        /// It's one picture, rather than files.
+        #[serde(default)]
+        image: bool,
+        #[serde(default)]
+        keys: bool,
+    },
     /// Send the sound playing on this PC, or stop. Off until asked.
     #[serde(rename_all = "camelCase")]
     SetAudio { enabled: bool },
@@ -393,6 +409,18 @@ pub enum HostMsg {
         files: Vec<CopiedFile>,
         /// Copied folders, which can't be fetched.
         folders: u32,
+        /// The one file is a picture that was copied, as a PNG, rather than
+        /// a file. Hosts from 0.1.12.
+        #[serde(default)]
+        image: bool,
+    },
+    /// Answers [`ClientMsg::Paste`]: it's on this PC's clipboard, or `message`
+    /// says why not.
+    #[serde(rename_all = "camelCase")]
+    Pasted {
+        id: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
     },
 }
 
@@ -426,6 +454,10 @@ pub struct FileHeader {
     /// The file's name on the client, without its folder.
     pub name: String,
     pub size: u64,
+    /// Part of what the client is pasting, kept aside for [`ClientMsg::Paste`]
+    /// rather than saved in Downloads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paste: Option<u32>,
 }
 
 /// Label of the data channels that fetch files copied on the host, one file
