@@ -36,6 +36,9 @@ static KEPT: AtomicU32 = AtomicU32::new(0);
 static STARTS: AtomicU32 = AtomicU32::new(0);
 static HEARD: AtomicU32 = AtomicU32::new(0);
 
+/// How often the hook is set up again, in milliseconds.
+const REHOOK_MS: u32 = 500;
+
 const COULDNT: &str = "Couldn't send Windows shortcuts to the other PC.";
 
 /// Starts taking shortcuts from Windows while `window` is in front, giving them to `keys`.
@@ -72,7 +75,7 @@ pub fn capture_keys(window: tauri::WebviewWindow, keys: Channel<Key>, request: u
             let taking = Taking { window: HWND(window as _), keys: taken_tx, held, taken: [false; 256] };
             TAKING.with(|t| *t.borrow_mut() = Some(taking));
             let module = GetModuleHandleW(None).ok().map(Into::into);
-            let hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook), module, 0) {
+            let mut installed = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook), module, 0) {
                 Ok(hook) => hook,
                 Err(e) => {
                     _ = started_tx.send(Err(e));
@@ -81,9 +84,20 @@ pub fn capture_keys(window: tauri::WebviewWindow, keys: Channel<Key>, request: u
             };
             STARTS.fetch_add(1, Ordering::Relaxed);
             _ = started_tx.send(Ok(GetCurrentThreadId()));
+            // Windows calls the newest hook first, and a program that hooked the
+            // keyboard later and doesn't pass keys on would keep them all from
+            // this one. Hooking again every so often puts this one first again.
+            _ = SetTimer(None, 0, REHOOK_MS, None);
             // The hook is called while this waits for messages.
-            while GetMessageW(&mut msg, None, 0, 0).0 > 0 {}
-            _ = UnhookWindowsHookEx(hook);
+            while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
+                if msg.message == WM_TIMER {
+                    if let Ok(newer) = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook), module, 0) {
+                        _ = UnhookWindowsHookEx(installed);
+                        installed = newer;
+                    }
+                }
+            }
+            _ = UnhookWindowsHookEx(installed);
         })
         .map_err(|e| Problem::new(COULDNT, e))?;
     let thread = started

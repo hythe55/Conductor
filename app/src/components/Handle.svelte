@@ -283,6 +283,7 @@
   class="handle-area"
   class:visible={awake || open || reconnecting || !!problem || sending || saving}
   class:coarse
+  class:faint={showStats}
   style:left="{handleCenter}px"
   bind:offsetWidth={handleWidth}
 >
@@ -510,6 +511,14 @@
     white-space: nowrap;
     opacity: 0;
     transition: opacity 200ms ease;
+  }
+
+  /* Some graphics cards stop drawing the connection details over the video
+     once nothing else is drawn on top of it, so while they're shown the
+     handle never goes fully clear. It comes before the rules below so
+     they still win. */
+  .handle-area.faint {
+    opacity: 0.01;
   }
 
   .handle-area.coarse {

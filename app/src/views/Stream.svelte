@@ -824,8 +824,5 @@
     font-size: var(--text-sm);
     font-variant-numeric: tabular-nums;
     pointer-events: none;
-    /* Some graphics cards draw the video above anything that shares its layer,
-       so the details get one of their own, like the handle. */
-    will-change: transform;
   }
 </style>
