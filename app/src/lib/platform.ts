@@ -293,6 +293,9 @@ export async function stillHoldsImage(): Promise<boolean> {
   )
 }
 
+/** Why shortcuts couldn’t be taken last time, for the connection details. */
+let shortcutProblem: Problem | null = null
+
 /**
  * In the desktop app, takes keys Windows would act on itself, like Alt+Tab and
  * the Windows key, while `surface` has focus, and gives them to `send` instead.
@@ -313,7 +316,9 @@ export function takeShortcuts(surface: HTMLElement, send: (code: string, down: b
       send(code, down)
     }
     keys = channel
-    invoke('capture_keys', { keys: channel, request: channel.id }).catch(() => {
+    shortcutProblem = null
+    invoke('capture_keys', { keys: channel, request: channel.id }).catch((e) => {
+      shortcutProblem = toProblem(e, 'Couldn’t send Windows shortcuts to the other PC.')
       if (keys === channel) keys = null
     })
   }
@@ -338,9 +343,15 @@ export function takeShortcuts(surface: HTMLElement, send: (code: string, down: b
 }
 
 /** Whether Windows shortcuts are being kept for the other PC, and how many keys were, for the connection details. */
-export async function shortcutStatus(): Promise<{ taking: boolean; seen: number; kept: number } | null> {
+export async function shortcutStatus(): Promise<{
+  taking: boolean
+  seen: number
+  kept: number
+  problem: Problem | null
+} | null> {
   if (!isDesktopApp) return null
-  return invoke<{ taking: boolean; seen: number; kept: number }>('shortcut_status').catch(() => null)
+  const status = await invoke<{ taking: boolean; seen: number; kept: number }>('shortcut_status').catch(() => null)
+  return status && { ...status, problem: shortcutProblem }
 }
 
 /** Whether saved files go straight into the Downloads folder, rather than being downloaded. */

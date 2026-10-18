@@ -549,6 +549,7 @@
     <video
       bind:this={video}
       class:ready={hasVideo}
+      class:detailed={showStats}
       autoplay
       playsinline
       muted
@@ -643,11 +644,18 @@
       {#if stats.decoder}<span>Decoder: {stats.decoder}</span>{/if}
       {#if stats.dropped || stats.lost}<span>{stats.dropped} frames dropped, {stats.lost} packets lost</span>{/if}
       {#if shortcuts}
-        <span>
-          {shortcuts.taking
-            ? `Shortcuts sent to ${info.name}: ${shortcuts.kept} of ${shortcuts.seen} key presses`
-            : 'Shortcuts stay on this PC'}
-        </span>
+        {#if shortcuts.taking}
+          <span>Shortcuts sent to {info.name}: {shortcuts.kept} of {shortcuts.seen} key presses</span>
+        {:else if shortcuts.problem}
+          <span>
+            {shortcuts.problem.message}{shortcuts.problem.details ? ` ${shortcuts.problem.details}` : ''}
+          </span>
+        {:else}
+          <span>Shortcuts stay on this PC while Conductor isn’t in front</span>
+          {#if shortcuts.seen}
+            <span>Earlier: {shortcuts.kept} of {shortcuts.seen} key presses were sent to {info.name}</span>
+          {/if}
+        {/if}
       {/if}
     </div>
   {/if}
@@ -744,6 +752,12 @@
 
   video.ready {
     opacity: 1;
+  }
+
+  /* Some graphics cards show the video on a layer of its own, above the page and
+     so above the details. Video that isn't fully opaque stays in the page. */
+  video.ready.detailed {
+    opacity: 0.999;
   }
 
   .notice {
