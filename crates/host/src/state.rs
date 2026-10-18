@@ -14,6 +14,8 @@ use tokio::sync::Mutex;
 const DEVICES_TTL: Duration = Duration::from_secs(5);
 const STATUS_TTL: Duration = Duration::from_secs(30);
 const ROUTE_TTL: Duration = Duration::from_secs(5);
+/// How long a failed status isn't asked for again.
+const RETRY_AFTER: Duration = Duration::from_secs(15);
 /// How long a device someone at this PC let in may connect again without being
 /// asked about, after its session ends: long enough to get back after a dropped
 /// connection.
@@ -33,7 +35,8 @@ pub struct AppState {
     /// Devices someone at this PC let in, until when they may connect again without asking.
     allowed: std::sync::Mutex<HashMap<IpAddr, Instant>>,
     next_session: AtomicU64,
-    status: Mutex<(Status, Instant)>,
+    /// The last status, when it was read, and when reading it last failed.
+    status: Mutex<(Status, Instant, Option<Instant>)>,
     devices: Mutex<Option<(Vec<Device>, Instant)>>,
     wake_memory: WakeMemory,
     /// Names and addresses of the owner's own devices, lowercase.
@@ -54,7 +57,7 @@ impl AppState {
             allowed: std::sync::Mutex::new(HashMap::new()),
             next_session: AtomicU64::new(1),
             own_hosts: RwLock::new(own_hosts(&status)),
-            status: Mutex::new((status, Instant::now())),
+            status: Mutex::new((status, Instant::now(), None)),
             devices: Mutex::new(None),
             wake_memory: WakeMemory::open(crate::settings::data_dir().join("wake-peers.json")),
         });
@@ -91,14 +94,20 @@ impl AppState {
 
     async fn status_within(&self, max_age: Duration) -> Status {
         let mut cached = self.status.lock().await;
-        if cached.1.elapsed() > max_age {
+        // Just after the PC starts, Tailscale can take seconds to answer, and
+        // every request asking again would wait that long each time.
+        let failed_lately = cached.2.is_some_and(|t| t.elapsed() < RETRY_AFTER);
+        if cached.1.elapsed() > max_age && !failed_lately {
             match conductor_tailnet::status().await {
                 Ok(s) if s.is_running() => {
                     *self.own_hosts.write().unwrap() = own_hosts(&s);
-                    *cached = (s, Instant::now());
+                    *cached = (s, Instant::now(), None);
                 }
-                Ok(_) => {}
-                Err(e) => tracing::warn!("tailscale status: {e:#}"),
+                Ok(_) => cached.2 = Some(Instant::now()),
+                Err(e) => {
+                    tracing::warn!("tailscale status: {e:#}");
+                    cached.2 = Some(Instant::now());
+                }
             }
         }
         cached.0.clone()
@@ -124,7 +133,7 @@ impl AppState {
         if ip.is_loopback() {
             return self.name.clone();
         }
-        let status = self.status_within(Duration::from_secs(5)).await;
+        let status = self.status_within(STATUS_TTL).await;
         status
             .self_node
             .iter()

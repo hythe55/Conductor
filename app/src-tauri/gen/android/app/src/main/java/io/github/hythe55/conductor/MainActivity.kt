@@ -13,6 +13,7 @@ class MainActivity : TauriActivity() {
       }
     }
   }
+  private val localNetwork by lazy { LocalNetwork(this) }
   private var webView: WebView? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -27,6 +28,14 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     this.webView = webView
     webView.addJavascriptInterface(files, "ConductorAndroid")
+    webView.addJavascriptInterface(localNetwork, "ConductorNetwork")
+  }
+
+  override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    if (localNetwork.onResult(requestCode)) {
+      webView?.evaluateJavascript("window.dispatchEvent(new Event('conductorlocalnetwork'))", null)
+    }
   }
 
   // Files shared while the app is already open.

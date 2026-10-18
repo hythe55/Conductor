@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderValue, Method, StatusCode, header};
@@ -223,7 +224,9 @@ async fn create_session(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<SessionRequest>,
 ) -> Result<Json<SessionResponse>, (StatusCode, String)> {
-    let controller = state.device_name(peer.ip()).await;
+    // Only for showing who's connected, so it doesn't hold up the connection.
+    let name = tokio::time::timeout(Duration::from_secs(2), state.device_name(peer.ip())).await;
+    let controller = name.unwrap_or_else(|_| peer.ip().to_string());
     if Settings::load().ask && !state.allowed(peer.ip()) {
         let refused = |why: String| Err((StatusCode::CONFLICT, why));
         match crate::ask::ask(controller.clone(), peer.ip()).await {

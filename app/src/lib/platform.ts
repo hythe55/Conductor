@@ -75,9 +75,36 @@ async function devicesFromKnownPcs(): Promise<Device[]> {
   )
 }
 
+/** Android's local network permission, which looking on the Wi-Fi needs. See LocalNetwork.kt. */
+interface LocalNetwork {
+  allowed(): boolean
+  ask(): void
+}
+
+const localNetwork = (window as unknown as { ConductorNetwork?: LocalNetwork }).ConductorNetwork
+
+/** Asks for the local network permission if it's needed. True once it's given. */
+function allowLocalNetwork(): Promise<boolean> {
+  const permission = localNetwork
+  if (!permission || permission.allowed()) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const answered = () => {
+      window.removeEventListener('conductorlocalnetwork', answered)
+      resolve(permission.allowed())
+    }
+    window.addEventListener('conductorlocalnetwork', answered)
+    permission.ask()
+  })
+}
+
 /** PCs that answer on the phone's Wi-Fi. None anywhere but the phone app. */
 export async function nearbyPcs(): Promise<NearbyPc[]> {
   if (!isPhoneApp) return []
+  if (!(await allowLocalNetwork())) {
+    throw new Problem(
+      'Conductor needs permission to look for PCs on this Wi-Fi. If Android doesn’t ask, allow Nearby devices in Conductor’s app settings.',
+    )
+  }
   try {
     return await invoke<NearbyPc[]>('nearby_pcs')
   } catch (e) {
