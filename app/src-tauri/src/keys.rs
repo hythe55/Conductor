@@ -10,7 +10,9 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::System::Threading::{
+    GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -34,16 +36,29 @@ pub fn capture_keys(window: tauri::WebviewWindow, keys: Channel<Key>) -> Result<
     release_keys();
     let window = window.hwnd().map_err(|e| Problem::new(COULDNT, e))?.0 as isize;
     let (started_tx, started) = std::sync::mpsc::channel();
+    // Sending to the page waits for the app's main thread, and Windows lets a
+    // key through and quietly drops a hook that takes too long, so the hook
+    // only queues keys and this thread sends them on.
+    let (taken_tx, taken) = std::sync::mpsc::channel::<Key>();
+    std::thread::Builder::new()
+        .name("shortcut keys".into())
+        .spawn(move || {
+            for key in taken {
+                _ = keys.send(key);
+            }
+        })
+        .map_err(|e| Problem::new(COULDNT, e))?;
     // Its own thread, since Windows drops a hook that's slow to answer.
     std::thread::Builder::new()
         .name("shortcuts".into())
         .spawn(move || unsafe {
+            _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
             // Makes this thread's message queue, so it can be told to stop.
             let mut msg = MSG::default();
             _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
             // Keys already down when this starts.
             let held = std::array::from_fn(|vk| GetAsyncKeyState(vk as i32) < 0);
-            let taking = Taking { window: HWND(window as _), keys, held, taken: [false; 256] };
+            let taking = Taking { window: HWND(window as _), keys: taken_tx, held, taken: [false; 256] };
             TAKING.with(|t| *t.borrow_mut() = Some(taking));
             let module = GetModuleHandleW(None).ok().map(Into::into);
             let hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook), module, 0) {
@@ -78,7 +93,7 @@ pub fn release_keys() {
 struct Taking {
     /// The app's window. Shortcuts are only taken while it's in front.
     window: HWND,
-    keys: Channel<Key>,
+    keys: std::sync::mpsc::Sender<Key>,
     /// Keys held down, whether Windows saw them or not.
     held: [bool; 256],
     /// Keys whose press was taken, so letting go of them is taken too.
