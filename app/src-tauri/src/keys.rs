@@ -32,6 +32,9 @@ static HOOK_THREAD: Mutex<Option<(u32, u32)>> = Mutex::new(None);
 /// Keys pressed on this PC since shortcuts were last taken, and how many of them were kept from Windows.
 static SEEN: AtomicU32 = AtomicU32::new(0);
 static KEPT: AtomicU32 = AtomicU32::new(0);
+/// Since the app started: how many times the hook was set up, and how many key events Windows gave it.
+static STARTS: AtomicU32 = AtomicU32::new(0);
+static HEARD: AtomicU32 = AtomicU32::new(0);
 
 const COULDNT: &str = "Couldn't send Windows shortcuts to the other PC.";
 
@@ -76,6 +79,7 @@ pub fn capture_keys(window: tauri::WebviewWindow, keys: Channel<Key>, request: u
                     return;
                 }
             };
+            STARTS.fetch_add(1, Ordering::Relaxed);
             _ = started_tx.send(Ok(GetCurrentThreadId()));
             // The hook is called while this waits for messages.
             while GetMessageW(&mut msg, None, 0, 0).0 > 0 {}
@@ -107,6 +111,8 @@ pub struct ShortcutStatus {
     taking: bool,
     seen: u32,
     kept: u32,
+    starts: u32,
+    heard: u32,
 }
 
 #[tauri::command]
@@ -115,6 +121,8 @@ pub fn shortcut_status() -> ShortcutStatus {
         taking: HOOK_THREAD.lock().unwrap().is_some(),
         seen: SEEN.load(Ordering::Relaxed),
         kept: KEPT.load(Ordering::Relaxed),
+        starts: STARTS.load(Ordering::Relaxed),
+        heard: HEARD.load(Ordering::Relaxed),
     }
 }
 
@@ -143,6 +151,7 @@ thread_local! {
 }
 
 unsafe extern "system" fn hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    HEARD.fetch_add(1, Ordering::Relaxed);
     if code == HC_ACTION as i32 {
         let info = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         // Typed by the host on this PC, say while it controls itself.

@@ -3,6 +3,14 @@ import type { ClientMsg, MouseButton } from './types'
 type Send = (msg: ClientMsg) => void
 
 const BUTTONS: MouseButton[] = ['left', 'middle', 'right', 'back', 'forward']
+// PointerEvent.buttons bits, in the order of PointerEvent.button.
+const BUTTON_BITS = [1, 4, 2, 8, 16]
+
+function buttonsMask(buttons: Set<number>) {
+  let mask = 0
+  for (const b of buttons) mask |= BUTTON_BITS[b] ?? 0
+  return mask
+}
 
 /** Where the video image actually sits inside its element (object-fit: contain). */
 export function contentRect(video: HTMLVideoElement): DOMRect {
@@ -13,6 +21,12 @@ export function contentRect(video: HTMLVideoElement): DOMRect {
   const w = vw * scale
   const h = vh * scale
   return new DOMRect(box.left + (box.width - w) / 2, box.top + (box.height - h) / 2, w, h)
+}
+
+/** Whether a point is on the picture, not the bars around it. */
+function onPicture(video: HTMLVideoElement, clientX: number, clientY: number) {
+  const r = contentRect(video)
+  return clientX >= r.left && clientX < r.right && clientY >= r.top && clientY < r.bottom
 }
 
 function normalized(video: HTMLVideoElement, clientX: number, clientY: number) {
@@ -75,6 +89,8 @@ export function attachDesktopInput(
   let deciding = false
   // A paste key the remote PC presses itself, so letting go of it here isn't sent.
   let swallowed: string | null = null
+  // Buttons pressed on the bars around the picture, which the other PC never hears about.
+  const offPicture = new Set<number>()
 
   const flushPaste = () => {
     clearTimeout(pasteTimer)
@@ -155,6 +171,9 @@ export function attachDesktopInput(
       for (const p of points.length ? points : [e]) sendPen(p)
       return
     }
+    // On the bars the pointer stays where it left the picture, unless it's dragging something there.
+    const dragging = (e.buttons & ~buttonsMask(offPicture)) !== 0
+    if (!dragging && !onPicture(video, e.clientX, e.clientY)) return
     pending = normalized(video, e.clientX, e.clientY)
     if (!frame) frame = requestAnimationFrame(flushMove)
   }
@@ -165,6 +184,10 @@ export function attachDesktopInput(
     surface.focus()
     surface.setPointerCapture(e.pointerId)
     if (isPen(e)) return sendPen(e)
+    if (!onPicture(video, e.clientX, e.clientY)) {
+      offPicture.add(e.button)
+      return
+    }
     send({ t: 'mouseMove', ...normalized(video, e.clientX, e.clientY) })
     const button = BUTTONS[e.button]
     if (button) send({ t: 'mouseButton', button, down: true })
@@ -174,6 +197,7 @@ export function attachDesktopInput(
     if (e.pointerType === 'touch') return
     e.preventDefault()
     if (isPen(e)) return sendPen(e)
+    if (offPicture.delete(e.button)) return
     const button = BUTTONS[e.button]
     if (button) send({ t: 'mouseButton', button, down: false })
   }
@@ -230,7 +254,10 @@ export function attachDesktopInput(
     send({ t: 'penLeave' })
   }
 
-  const release = () => send({ t: 'releaseAll' })
+  const release = () => {
+    offPicture.clear()
+    send({ t: 'releaseAll' })
+  }
   const noMenu = (e: Event) => e.preventDefault()
 
   surface.addEventListener('pointermove', onMove)

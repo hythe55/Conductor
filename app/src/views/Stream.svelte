@@ -549,7 +549,6 @@
     <video
       bind:this={video}
       class:ready={hasVideo}
-      class:detailed={showStats}
       autoplay
       playsinline
       muted
@@ -651,11 +650,12 @@
             {shortcuts.problem.message}{shortcuts.problem.details ? ` ${shortcuts.problem.details}` : ''}
           </span>
         {:else}
-          <span>Shortcuts stay on this PC while Conductor isn’t in front</span>
+          <span>Shortcuts stay on this PC until you click the screen of {info.name}</span>
           {#if shortcuts.seen}
             <span>Earlier: {shortcuts.kept} of {shortcuts.seen} key presses were sent to {info.name}</span>
           {/if}
         {/if}
+        <span>Shortcut hook: asked {shortcuts.asks}, started {shortcuts.starts}, heard {shortcuts.heard}</span>
       {/if}
     </div>
   {/if}
@@ -754,12 +754,6 @@
     opacity: 1;
   }
 
-  /* Some graphics cards show the video on a layer of its own, above the page and
-     so above the details. Video that isn't fully opaque stays in the page. */
-  video.ready.detailed {
-    opacity: 0.999;
-  }
-
   .notice {
     position: absolute;
     inset: 0;
@@ -830,5 +824,8 @@
     font-size: var(--text-sm);
     font-variant-numeric: tabular-nums;
     pointer-events: none;
+    /* Some graphics cards draw the video above anything that shares its layer,
+       so the details get one of their own, like the handle. */
+    will-change: transform;
   }
 </style>

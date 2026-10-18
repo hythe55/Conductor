@@ -295,6 +295,8 @@ export async function stillHoldsImage(): Promise<boolean> {
 
 /** Why shortcuts couldn’t be taken last time, for the connection details. */
 let shortcutProblem: Problem | null = null
+/** How many times the page asked for them, for the connection details. */
+let shortcutAsks = 0
 
 /**
  * In the desktop app, takes keys Windows would act on itself, like Alt+Tab and
@@ -317,6 +319,7 @@ export function takeShortcuts(surface: HTMLElement, send: (code: string, down: b
     }
     keys = channel
     shortcutProblem = null
+    shortcutAsks++
     invoke('capture_keys', { keys: channel, request: channel.id }).catch((e) => {
       shortcutProblem = toProblem(e, 'Couldn’t send Windows shortcuts to the other PC.')
       if (keys === channel) keys = null
@@ -347,11 +350,15 @@ export async function shortcutStatus(): Promise<{
   taking: boolean
   seen: number
   kept: number
+  starts: number
+  heard: number
+  asks: number
   problem: Problem | null
 } | null> {
   if (!isDesktopApp) return null
-  const status = await invoke<{ taking: boolean; seen: number; kept: number }>('shortcut_status').catch(() => null)
-  return status && { ...status, problem: shortcutProblem }
+  type Status = { taking: boolean; seen: number; kept: number; starts: number; heard: number }
+  const status = await invoke<Status>('shortcut_status').catch(() => null)
+  return status && { ...status, asks: shortcutAsks, problem: shortcutProblem }
 }
 
 /** Whether saved files go straight into the Downloads folder, rather than being downloaded. */
