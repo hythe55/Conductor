@@ -27,6 +27,7 @@ use crate::indicator::{Area, Banner};
 use crate::power::KeepAwake;
 use crate::input::{Injector, Pen};
 use crate::pipeline::{Config, Control, Pipeline, PipelineEvent};
+use crate::quality::Quality;
 use crate::state::AppState;
 use crate::window;
 
@@ -68,6 +69,7 @@ pub struct Params {
     pub offer: String,
     pub display: Option<String>,
     pub max_size: (u32, u32),
+    pub sharp: bool,
 }
 
 /// Accepts an SDP offer, spawns the session task and returns the SDP answer.
@@ -126,6 +128,11 @@ struct Session {
     awake: Option<KeepAwake>,
     max_size: (u32, u32),
     bitrate: u32,
+    /// What the connection carries now, without [`Session::bitrate`]'s smoothing.
+    carried: u32,
+    quality: Quality,
+    /// Pixels in the picture at full size, once it has started.
+    full_pixels: u64,
     connected: bool,
     paused: bool,
     /// When to try starting the picture again after it failed.
@@ -196,6 +203,9 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params, mut route_rx: mpsc::Re
         awake: None,
         max_size: params.max_size,
         bitrate: START_BITRATE,
+        carried: START_BITRATE,
+        quality: Quality::new(params.sharp, Instant::now()),
+        full_pixels: 0,
         connected: false,
         paused: false,
         retry_at: None,
@@ -279,6 +289,9 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params, mut route_rx: mpsc::Re
             _ = tick.tick() => {
                 ticks = ticks.wrapping_add(1);
                 s.injector.tick();
+                if s.quality.update(s.carried, s.full_pixels, Instant::now()) {
+                    s.requality();
+                }
                 if s.retry_at.is_some_and(|t| t <= Instant::now()) {
                     s.retry_at = None;
                     s.start_pipeline();
@@ -406,6 +419,7 @@ impl Session {
                 self.stats.estimate = estimate.as_u64();
                 let target = ((estimate.as_u64() as f64) * 0.85) as u32;
                 let target = target.clamp(MIN_BITRATE, MAX_BITRATE);
+                self.carried = target;
                 // Ignore jitter; re-tune only on meaningful changes.
                 if (target as f64 - self.bitrate as f64).abs() / self.bitrate as f64 > 0.1 {
                     self.bitrate = target;
@@ -434,7 +448,8 @@ impl Session {
                 display: self.display.clone(),
                 window: self.window,
                 max_size: self.max_size,
-                fps: 60,
+                scale: self.quality.scale(),
+                fps: self.quality.fps(),
                 bitrate: self.bitrate,
                 profile,
             },
@@ -460,6 +475,19 @@ impl Session {
     fn restart_pipeline(&mut self) {
         self.pipeline = None;
         self.start_pipeline();
+    }
+
+    /// The picture gives way differently now, or no longer has to.
+    fn requality(&mut self) {
+        tracing::info!(
+            "at {:.1} Mbps, sending {:.0}% of the size at {} fps",
+            self.carried as f64 / 1e6,
+            self.quality.scale() * 100.0,
+            self.quality.fps()
+        );
+        if self.pipeline.is_some() {
+            self.restart_pipeline();
+        }
     }
 
     fn handle_client(&mut self, msg: ClientMsg) {
@@ -510,6 +538,11 @@ impl Session {
                 self.hide_screen = hide;
                 if let Some(b) = &self.banner {
                     b.hide_screen(hide);
+                }
+            }
+            ClientMsg::SetSharp { sharp } => {
+                if self.quality.set_sharp(sharp, self.carried, self.full_pixels) {
+                    self.requality();
                 }
             }
             ClientMsg::SetAudio { enabled } => {
@@ -622,6 +655,8 @@ impl Session {
                     None => tracing::info!("streaming {id} at {width}x{height} via {encoder}"),
                 }
                 self.injector.set_display((view.x, view.y), (view.width, view.height));
+                let full = crate::convert::fit((view.width, view.height), self.max_size);
+                self.full_pixels = full.0 as u64 * full.1 as u64;
                 if let Some(b) = &self.banner {
                     b.set_area(Area { x: origin.0, y: origin.1, width: size.0, height: size.1 });
                 }

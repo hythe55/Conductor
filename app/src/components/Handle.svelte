@@ -39,6 +39,8 @@
     /** The remote PC's name. */
     pc: string
     hideScreen: boolean
+    /** What a slow connection keeps: text sharp, or motion smooth. Null where the PC can't choose. */
+    sharp: boolean | null
     onselectdisplay: (id: string) => void
     /** Asks for the windows open on the remote PC. Only given where it can show one. */
     onlistwindows?: () => void
@@ -47,6 +49,7 @@
     ontogglestats: () => void
     ontogglesound: () => void
     ontogglehidescreen: () => void
+    onsetsharp: (sharp: boolean) => void
     /** Opens the on-screen keyboard. Only given where there's no real one. */
     onkeyboard?: () => void
     onsendfiles: () => void
@@ -74,6 +77,7 @@
     sound,
     pc,
     hideScreen,
+    sharp,
     onselectdisplay,
     onlistwindows,
     onselectwindow,
@@ -81,6 +85,7 @@
     ontogglestats,
     ontogglesound,
     ontogglehidescreen,
+    onsetsharp,
     onkeyboard,
     onsendfiles,
     onstopsending,
@@ -395,6 +400,23 @@
                 <span class="more"><Icon name="forward" /></span>
               </button>
             {/if}
+          </div>
+        {/if}
+
+        {#if sharp !== null}
+          <div class="group" role="group" aria-label="On a slow connection">
+            {#each [false, true] as option (option)}
+              <button
+                class="item"
+                role="menuitemradio"
+                aria-checked={sharp === option}
+                tabindex="-1"
+                onclick={() => run(() => onsetsharp(option))}
+              >
+                <span class="check">{#if sharp === option}<Icon name="check" />{/if}</span>
+                <span class="text">{option ? 'Keep text sharp' : 'Keep motion smooth'}</span>
+              </button>
+            {/each}
           </div>
         {/if}
 

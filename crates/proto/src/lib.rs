@@ -106,6 +106,9 @@ pub struct HostInfo {
     /// [`ClientMsg::Paste`]. Hosts from 0.1.12.
     #[serde(default)]
     pub paste: bool,
+    /// Takes [`SessionRequest::sharp`] and [`ClientMsg::SetSharp`]. Hosts from 0.1.12.
+    #[serde(default)]
+    pub sharp: bool,
 }
 
 /// Something a PC does on its own at a set time, unless it's in use.
@@ -267,6 +270,10 @@ pub struct SessionRequest {
     pub max_width: Option<u32>,
     #[serde(default)]
     pub max_height: Option<u32>,
+    /// On a slow connection, send fewer frames at full size rather than smaller
+    /// ones at the full frame rate.
+    #[serde(default)]
+    pub sharp: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -370,6 +377,9 @@ pub enum ClientMsg {
     /// session does, or stop. Ends with the session.
     #[serde(rename_all = "camelCase")]
     HideScreen { hide: bool },
+    /// Changes [`SessionRequest::sharp`]. Only sent to hosts with [`HostInfo::sharp`].
+    #[serde(rename_all = "camelCase")]
+    SetSharp { sharp: bool },
 }
 
 /// Host to client, over the `control` data channel.

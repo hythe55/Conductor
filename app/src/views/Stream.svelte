@@ -26,6 +26,7 @@
     version: info.version,
     displays: info.displays,
     display: info.displays.find((d) => d.primary)?.id ?? info.displays[0]?.id ?? '',
+    sharp: !!info.sharp,
   }))
 
   let phase = $state<SessionState>('connecting')
@@ -55,6 +56,9 @@
   // Covering the remote PC's screen is remembered for each PC.
   const HIDE_KEY = `conductor.hideScreen.${start.name}`
   let hideScreen = $state(savedHideScreen())
+  // And what gives way on a slow connection: motion or detail.
+  const SHARP_KEY = `conductor.sharp.${start.name}`
+  let sharp = $state(savedSharp())
   let route = $state<Route | null>(null)
   // Said on the handle once the connection has been relayed for a while. Tailscale
   // often starts relayed and finds a direct path within seconds.
@@ -176,6 +180,7 @@
       display: start.display || undefined,
       maxWidth: Math.round(screen.width * dpr),
       maxHeight: Math.round(screen.height * dpr),
+      sharp: start.sharp ? untrack(() => sharp) : undefined,
     },
     {
       onState(s, e) {
@@ -343,6 +348,27 @@
     session.send({ t: 'setAudio', enabled: sound })
     if (sound) playSound()
     else soundLater?.abort()
+  }
+
+  function savedSharp() {
+    try {
+      return localStorage.getItem(SHARP_KEY) === 'on'
+    } catch {
+      return false
+    }
+  }
+
+  function setSharp(value: boolean) {
+    if (value === sharp) return
+    sharp = value
+    try {
+      if (sharp) localStorage.setItem(SHARP_KEY, 'on')
+      else localStorage.removeItem(SHARP_KEY)
+    } catch {
+      // Not remembered; it still changed.
+    }
+    session.options.sharp = sharp
+    session.send({ t: 'setSharp', sharp })
   }
 
   function savedHideScreen() {
@@ -594,6 +620,7 @@
       {sound}
       pc={info.name}
       {hideScreen}
+      sharp={start.sharp ? sharp : null}
       onselectdisplay={selectDisplay}
       onlistwindows={canShowWindows ? listWindows : undefined}
       onselectwindow={selectWindow}
@@ -601,6 +628,7 @@
       ontogglestats={() => (showStats = !showStats)}
       ontogglesound={toggleSound}
       ontogglehidescreen={toggleHideScreen}
+      onsetsharp={setSharp}
       onkeyboard={coarse ? () => keyboard.show() : undefined}
       onsendfiles={() => picker.click()}
       onstopsending={() => transfers.stopSending()}

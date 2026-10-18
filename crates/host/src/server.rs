@@ -152,6 +152,7 @@ pub fn host_info(state: &AppState) -> HostInfo {
         schedule: Some(crate::schedule::load()),
         pen: true,
         paste: true,
+        sharp: true,
     }
 }
 
@@ -225,6 +226,7 @@ async fn create_session(
         offer: req.sdp,
         display: req.display,
         max_size: (req.max_width.unwrap_or(2560).clamp(320, 7680), req.max_height.unwrap_or(1600).clamp(240, 4320)),
+        sharp: req.sharp,
     };
     match session::start(state.clone(), state.tailscale_ip, params).await {
         Ok(sdp) => Ok(Json(SessionResponse { sdp })),

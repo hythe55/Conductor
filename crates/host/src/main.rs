@@ -25,6 +25,7 @@ mod pen;
 mod pipeline;
 mod power;
 mod preview;
+mod quality;
 mod schedule;
 mod server;
 mod service;

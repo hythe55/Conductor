@@ -62,6 +62,8 @@ pub struct Config {
     /// Show only this window, from the display most of it is on.
     pub window: Option<window::Handle>,
     pub max_size: (u32, u32),
+    /// Width and height as parts of what fits in `max_size`, on a connection too slow for all of it.
+    pub scale: f64,
     pub fps: u32,
     pub bitrate: u32,
     pub profile: Profile,
@@ -157,7 +159,8 @@ fn run(
                 screen
             }
         };
-        let size = fit((view.width, view.height), config.max_size);
+        let full = fit((view.width, view.height), config.max_size);
+        let size = fit(full, ((full.0 as f64 * config.scale) as u32, (full.1 as f64 * config.scale) as u32));
         let mut conv =
             Converter::new(&cap.device, &cap.context, &cap.texture, (cap.width, cap.height), within(view, screen), size)?;
         let mut enc = Encoder::new(&cap.device, cap.luid, size.0, size.1, config.fps, config.bitrate, config.profile)?;

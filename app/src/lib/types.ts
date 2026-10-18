@@ -44,6 +44,8 @@ export interface HostInfo {
   pen?: boolean
   /** Takes pictures and files to paste, and `paste` messages. From 0.1.12. */
   paste?: boolean
+  /** Takes `sharp` when a session starts, and `setSharp` messages. From 0.1.12. */
+  sharp?: boolean
 }
 
 /** Something a PC does on its own at a set time, unless it's in use. */
@@ -142,6 +144,8 @@ export type ClientMsg =
   | { t: 'setAudio'; enabled: boolean }
   /** Cover the remote PC's displays so nobody there sees the session. Ends with it. */
   | { t: 'hideScreen'; hide: boolean }
+  /** Changes what gives way on a slow connection; see `SessionOptions.sharp`. */
+  | { t: 'setSharp'; sharp: boolean }
 
 export type HostMsg =
   | { t: 'hello'; host: HostInfo; display: string }

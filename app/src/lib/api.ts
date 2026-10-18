@@ -51,6 +51,11 @@ export interface SessionOptions {
   display?: string
   maxWidth?: number
   maxHeight?: number
+  /**
+   * On a slow connection, send fewer frames at full size, keeping text sharp,
+   * rather than smaller ones at the full frame rate. Only for hosts with `sharp`.
+   */
+  sharp?: boolean
 }
 
 export async function createSession(host: HostUrl, sdp: string, opts: SessionOptions): Promise<string> {
