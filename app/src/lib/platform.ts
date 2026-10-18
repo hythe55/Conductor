@@ -313,14 +313,16 @@ export function takeShortcuts(surface: HTMLElement, send: (code: string, down: b
       send(code, down)
     }
     keys = channel
-    invoke('capture_keys', { keys: channel }).catch(() => {
+    invoke('capture_keys', { keys: channel, request: channel.id }).catch(() => {
       if (keys === channel) keys = null
     })
   }
   const stop = () => {
     if (!keys) return
+    const channel = keys
     keys = null
-    invoke('release_keys').catch(() => {})
+    // Only this request: a newer one may already have reached the app.
+    invoke('release_keys', { request: channel.id }).catch(() => {})
     // Let go of them on the other PC too.
     for (const code of held) send(code, false)
     held.clear()
@@ -333,6 +335,12 @@ export function takeShortcuts(surface: HTMLElement, send: (code: string, down: b
     surface.removeEventListener('blur', stop)
     stop()
   }
+}
+
+/** Whether Windows shortcuts are being kept for the other PC, and how many keys were, for the connection details. */
+export async function shortcutStatus(): Promise<{ taking: boolean; seen: number; kept: number } | null> {
+  if (!isDesktopApp) return null
+  return invoke<{ taking: boolean; seen: number; kept: number }>('shortcut_status').catch(() => null)
 }
 
 /** Whether saved files go straight into the Downloads folder, rather than being downloaded. */

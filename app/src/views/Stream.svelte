@@ -3,7 +3,7 @@
   import { Problem } from '../lib/errors'
   import { attachDesktopInput } from '../lib/input'
   import { RemoteSession, type SessionState, type Stats } from '../lib/session'
-  import { readClipboard, stillHoldsImage, takeShortcuts, writeClipboard } from '../lib/platform'
+  import { readClipboard, shortcutStatus, stillHoldsImage, takeShortcuts, writeClipboard } from '../lib/platform'
   import { share } from '../lib/share.svelte'
   import { attachTouchInput } from '../lib/touch'
   import { Transfers } from '../lib/transfers.svelte'
@@ -48,6 +48,7 @@
   let panelOpen = $state(false)
   let showStats = $state(false)
   let stats = $state<Stats | null>(null)
+  let shortcuts = $state<Awaited<ReturnType<typeof shortcutStatus>>>(null)
   let fullscreen = $state(false)
   let speaker: HTMLAudioElement
   // Sound from the remote PC plays unless turned off, which is remembered.
@@ -337,9 +338,13 @@
   $effect(() => {
     if (!showStats) {
       stats = null
+      shortcuts = null
       return
     }
-    const timer = setInterval(async () => (stats = await session.stats()), 1000)
+    const timer = setInterval(async () => {
+      stats = await session.stats()
+      shortcuts = await shortcutStatus()
+    }, 1000)
     return () => clearInterval(timer)
   })
 
@@ -637,6 +642,13 @@
       {#if route}<span>{routeText(route)}</span>{/if}
       {#if stats.decoder}<span>Decoder: {stats.decoder}</span>{/if}
       {#if stats.dropped || stats.lost}<span>{stats.dropped} frames dropped, {stats.lost} packets lost</span>{/if}
+      {#if shortcuts}
+        <span>
+          {shortcuts.taking
+            ? `Shortcuts sent to ${info.name}: ${shortcuts.kept} of ${shortcuts.seen} key presses`
+            : 'Shortcuts stay on this PC'}
+        </span>
+      {/if}
     </div>
   {/if}
 

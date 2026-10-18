@@ -50,6 +50,7 @@ pub fn run() {
         local::clipboard_sequence,
         keys::capture_keys,
         keys::release_keys,
+        keys::shortcut_status,
         downloads::begin_save,
         downloads::write_save,
         downloads::end_save,

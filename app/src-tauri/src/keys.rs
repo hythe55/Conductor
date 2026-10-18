@@ -4,6 +4,7 @@
 //! hook takes them first and hands them to the app.
 
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 
 use serde::Serialize;
@@ -25,15 +26,22 @@ pub struct Key {
     down: bool,
 }
 
-/// The thread running the hook, while shortcuts are taken.
-static HOOK_THREAD: Mutex<Option<u32>> = Mutex::new(None);
+/// The request the page asked with and the thread running the hook, while shortcuts are taken.
+static HOOK_THREAD: Mutex<Option<(u32, u32)>> = Mutex::new(None);
+
+/// Keys pressed on this PC since shortcuts were last taken, and how many of them were kept from Windows.
+static SEEN: AtomicU32 = AtomicU32::new(0);
+static KEPT: AtomicU32 = AtomicU32::new(0);
 
 const COULDNT: &str = "Couldn't send Windows shortcuts to the other PC.";
 
 /// Starts taking shortcuts from Windows while `window` is in front, giving them to `keys`.
+/// `request` is the page's id for the request, to let go of them with.
 #[tauri::command]
-pub fn capture_keys(window: tauri::WebviewWindow, keys: Channel<Key>) -> Result<(), Problem> {
-    release_keys();
+pub fn capture_keys(window: tauri::WebviewWindow, keys: Channel<Key>, request: u32) -> Result<(), Problem> {
+    stop();
+    SEEN.store(0, Ordering::Relaxed);
+    KEPT.store(0, Ordering::Relaxed);
     let window = window.hwnd().map_err(|e| Problem::new(COULDNT, e))?.0 as isize;
     let (started_tx, started) = std::sync::mpsc::channel();
     // Sending to the page waits for the app's main thread, and Windows lets a
@@ -78,14 +86,44 @@ pub fn capture_keys(window: tauri::WebviewWindow, keys: Channel<Key>) -> Result<
         .recv()
         .map_err(|e| Problem::new(COULDNT, e))?
         .map_err(|e| Problem::new(COULDNT, e))?;
-    *HOOK_THREAD.lock().unwrap() = Some(thread);
+    *HOOK_THREAD.lock().unwrap() = Some((request, thread));
     Ok(())
 }
 
-/// Leaves shortcuts to Windows again.
+/// Leaves shortcuts to Windows again, if they're still taken for `request`.
+/// The page can ask for them again before an older request to let go arrives,
+/// which then mustn't let go of the newer ones.
 #[tauri::command]
-pub fn release_keys() {
-    if let Some(thread) = HOOK_THREAD.lock().unwrap().take() {
+pub fn release_keys(request: u32) {
+    let mut taken = HOOK_THREAD.lock().unwrap();
+    if taken.is_some_and(|(asked, _)| asked == request) {
+        quit(taken.take());
+    }
+}
+
+/// Whether shortcuts are taken, for the connection details.
+#[derive(Serialize)]
+pub struct ShortcutStatus {
+    taking: bool,
+    seen: u32,
+    kept: u32,
+}
+
+#[tauri::command]
+pub fn shortcut_status() -> ShortcutStatus {
+    ShortcutStatus {
+        taking: HOOK_THREAD.lock().unwrap().is_some(),
+        seen: SEEN.load(Ordering::Relaxed),
+        kept: KEPT.load(Ordering::Relaxed),
+    }
+}
+
+fn stop() {
+    quit(HOOK_THREAD.lock().unwrap().take());
+}
+
+fn quit(hook: Option<(u32, u32)>) {
+    if let Some((_, thread)) = hook {
         unsafe { _ = PostThreadMessageW(thread, WM_QUIT, WPARAM(0), LPARAM(0)) };
     }
 }
@@ -112,8 +150,14 @@ unsafe extern "system" fn hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRE
         let take = |t: &RefCell<Option<Taking>>| {
             t.try_borrow_mut().is_ok_and(|mut t| t.as_mut().is_some_and(|t| t.take(info)))
         };
-        if !typed && TAKING.with(take) {
-            return LRESULT(1);
+        if !typed {
+            // Presses only, for the connection details.
+            let down = !info.flags.contains(LLKHF_UP);
+            SEEN.fetch_add(down as u32, Ordering::Relaxed);
+            if TAKING.with(take) {
+                KEPT.fetch_add(down as u32, Ordering::Relaxed);
+                return LRESULT(1);
+            }
         }
     }
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
