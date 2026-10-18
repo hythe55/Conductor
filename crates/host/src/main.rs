@@ -22,6 +22,7 @@ mod https;
 mod indicator;
 mod input;
 mod install;
+mod nearby;
 mod pen;
 mod pipeline;
 mod power;
@@ -175,6 +176,7 @@ async fn serve(args: Args) -> Result<()> {
     let app = server::router(state.clone());
     if args.mode == Mode::Agent {
         tokio::spawn(schedule::run(state.clone()));
+        nearby::spawn(state.name.clone(), state.dns_label.clone(), ip);
     }
     let mut servers = Vec::new();
     for addr in [SocketAddr::new(ip, args.port), SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), args.port)] {

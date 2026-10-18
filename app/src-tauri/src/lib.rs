@@ -1,7 +1,8 @@
 //! Conductor app shell. The interface is the same web client every host
 //! serves; this adds what a browser can't do on its own: read the tailnet
 //! device list, switch hosting for this PC on or off, save files from the
-//! PC being controlled, and send it shortcuts like Alt+Tab.
+//! PC being controlled, and send it shortcuts like Alt+Tab. On a phone, it
+//! finds the owner's PCs on the same Wi-Fi.
 
 #[cfg(windows)]
 mod downloads;
@@ -9,6 +10,7 @@ mod downloads;
 mod keys;
 #[cfg(windows)]
 mod local;
+mod nearby;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -39,6 +41,7 @@ pub fn run() {
         local::set_auto_update,
         local::set_previews,
         local::set_ask,
+        local::set_nearby,
         local::check_for_updates,
         local::install_update,
         local::read_clipboard,
@@ -51,6 +54,9 @@ pub fn run() {
         downloads::write_save,
         downloads::end_save,
         downloads::abort_save,
+        nearby::nearby_pcs,
     ]);
+    #[cfg(not(windows))]
+    let builder = builder.invoke_handler(tauri::generate_handler![nearby::nearby_pcs]);
     builder.run(tauri::generate_context!()).expect("error while running Conductor");
 }

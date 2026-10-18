@@ -5,10 +5,18 @@
   import Schedule from '../components/Schedule.svelte'
   import { confirmWake, deviceUrl, power, reachable, Unreachable, wake } from '../lib/api'
   import { Problem, toProblem } from '../lib/errors'
-  import { devicesFrom, isDesktopApp, isPhoneApp, knownPcs, listDevices } from '../lib/platform'
+  import {
+    devicesFrom,
+    devicesFromNearby,
+    isDesktopApp,
+    isPhoneApp,
+    knownPcs,
+    listDevices,
+    nearbyPcs,
+  } from '../lib/platform'
   import { summary } from '../lib/schedule'
   import { share } from '../lib/share.svelte'
-  import type { Device, DisplayInfo, HostInfo, PowerAction, PowerSchedule, WakeAdapter } from '../lib/types'
+  import type { Device, DisplayInfo, HostInfo, NearbyPc, PowerAction, PowerSchedule, WakeAdapter } from '../lib/types'
   import { waitUntil, wakerFor } from '../lib/wake'
 
   let {
@@ -44,11 +52,56 @@
   const previewAt = new Map<string, number>()
   const PREVIEW_EVERY = 30_000
 
-  /** The phone app asks one of the owner's PCs for the list; this is for naming one. */
-  let askPc = $state(isPhoneApp && knownPcs().length === 0)
+  /**
+   * The phone app asks one of the owner's PCs for the list. To find one, it
+   * looks on the phone's Wi-Fi, and when none answers there, the owner names one.
+   */
+  const noPcs = isPhoneApp && knownPcs().length === 0
+  let askPc = $state(noPcs)
   let pcName = $state('')
   let finding = $state(false)
   let pcProblem = $state<Problem | null>(null)
+  let looking = $state(false)
+  /** Looked on the Wi-Fi since the owner was last asked for a PC. */
+  let looked = $state(false)
+  let noneNearby = $state(false)
+  /** PCs answered on the Wi-Fi, but didn't give the device list. */
+  let nearbyProblem = $state<Problem | null>(null)
+
+  /** Looks for PCs on the phone's Wi-Fi, and lists the devices from the first that answers. */
+  async function lookNearby() {
+    looking = true
+    let found: NearbyPc[] = []
+    let problem = null
+    try {
+      found = await nearbyPcs()
+      // Unless a PC named meanwhile answered first.
+      const list = found.length && askPc ? await devicesFromNearby(found) : null
+      if (list && askPc) {
+        all = list
+        error = null
+        askPc = false
+      }
+    } catch (e) {
+      problem = toProblem(e, 'Couldn’t get the list of devices.')
+    }
+    // Both at once, so what's shown about the last look stays until there's news.
+    noneNearby = !problem && found.length === 0
+    nearbyProblem = problem
+    looking = false
+    looked = true
+  }
+
+  if (noPcs) lookNearby()
+
+  async function lookAgain() {
+    if (looking) return
+    await lookNearby()
+    if (askPc) return
+    // The button pressed went away with the form.
+    await tick()
+    heading?.focus()
+  }
 
   async function findDevices(e: SubmitEvent) {
     e.preventDefault()
@@ -74,6 +127,7 @@
 
   async function usePc() {
     askPc = true
+    looked = true
     await tick()
     document.getElementById('pc-name')?.focus()
   }
@@ -534,10 +588,27 @@
         <button class="btn quiet" onclick={() => share.dismiss()}>{share.files.length ? 'Don’t send' : 'OK'}</button>
       </div>
     {/if}
+    {#if askPc && looking}
+      <p class="quiet nearby-status">Looking for PCs on this Wi-Fi…</p>
+    {:else if askPc && noneNearby}
+      <p class="nearby-status">No PCs running Conductor answered on this Wi-Fi.</p>
+    {/if}
   </div>
 
-  {#if askPc}
+  {#if askPc && looked}
     <form class="find-pc" onsubmit={findDevices}>
+      {#if noneNearby || nearbyProblem}
+        <div class="nearby">
+          {#if nearbyProblem}
+            {#key nearbyProblem}
+              <div class="problem" role="alert"><ProblemText problem={nearbyProblem} /></div>
+            {/key}
+          {/if}
+          <button type="button" class="btn" aria-disabled={looking} onclick={lookAgain}>
+            {nearbyProblem ? 'Try again' : 'Look again'}
+          </button>
+        </div>
+      {/if}
       <label for="pc-name">Enter the name of one of your PCs that runs Conductor, as the Tailscale app shows it.</label>
       <div class="find">
         <input
@@ -558,6 +629,8 @@
         </div>
       {/if}
     </form>
+  {:else if askPc}
+    <!-- Looking on the Wi-Fi, which the status above says. -->
   {:else if error}
     <div class="problem" role="alert">
       <ProblemText problem={error} />
@@ -1128,6 +1201,18 @@
     display: flex;
     gap: var(--space-2);
     width: 100%;
+  }
+
+  .nearby {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+  }
+
+  .nearby-status {
+    margin: 0 0 var(--space-2);
   }
 
   input {

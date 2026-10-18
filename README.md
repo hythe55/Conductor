@@ -29,7 +29,7 @@ Download the latest installer from [Releases](https://github.com/hythe55/Conduct
 
 Windows may warn that the installer is from an unknown publisher, because it isn't code-signed yet. Choose **More info**, then **Run anyway**.
 
-To control your PCs from an Android phone or tablet, download `Conductor_<version>_android-arm64.apk` from the same release and open it. Android asks you to allow installs from your browser or file manager the first time. The first time the app opens, it asks for the name of one of your PCs, since a phone can't list the devices on your tailnet itself. The Android app doesn't update itself yet: install a newer APK over it. It controls PCs but can't be controlled.
+To control your PCs from an Android phone or tablet, download `Conductor_<version>_android-arm64.apk` from the same release and open it. Android asks you to allow installs from your browser or file manager the first time. A phone can't list the devices on your tailnet itself, so the first time the app opens, it looks for a PC with Conductor on the same Wi-Fi and asks that one. If none answers, it asks for the name of one of your PCs. PCs can stop answering in Settings. The Android app doesn't update itself yet: install a newer APK over it. It controls PCs but can't be controlled.
 
 ## Use it from a browser
 

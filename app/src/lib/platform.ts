@@ -3,7 +3,7 @@ import { android, toBase64 } from './android'
 import { devices as fetchDevices, PORT, Unreachable } from './api'
 import { Problem, toProblem } from './errors'
 import type { FileSink } from './files'
-import type { ControlStatus, Device } from './types'
+import type { ControlStatus, Device, NearbyPc } from './types'
 
 /** Running inside the Conductor app rather than a browser. */
 export const isApp = '__TAURI_INTERNALS__' in window
@@ -45,10 +45,12 @@ export async function devicesFrom(pc: string): Promise<Device[]> {
   return list
 }
 
-async function devicesFromKnownPcs(): Promise<Device[]> {
-  const pcs = knownPcs()
-  if (pcs.length === 0) throw new Problem('Enter the name of a PC that runs Conductor.')
-  // All at once, since a PC that's asleep takes seconds to give up on.
+/**
+ * Asks all of `pcs` for the device list at once, since a PC that's asleep takes
+ * seconds to give up on, and takes the first answer. When none answers, says
+ * `unreachable`, with what went wrong with each.
+ */
+async function firstAnswer(pcs: string[], unreachable: string): Promise<Device[]> {
   const asks = pcs.map(async (pc) => ({ pc, list: await fetchDevices(`http://${pc}:${PORT}`) }))
   try {
     const { pc, list } = await Promise.any(asks)
@@ -58,13 +60,39 @@ async function devicesFromKnownPcs(): Promise<Device[]> {
     const errors: unknown[] = e instanceof AggregateError ? e.errors : [e]
     const other = errors.find((x) => !(x instanceof Unreachable))
     if (other) throw toProblem(other, 'Couldn’t get the list of devices.')
-    throw new Problem(
-      pcs.length === 1
-        ? `Couldn’t reach ${pcs[0]}. It may be off, asleep, or not on your tailnet.`
-        : 'Couldn’t reach any of your PCs. They may be off, asleep, or not on your tailnet.',
-      errors.map((x) => (x as Unreachable).details).join('\n'),
-    )
+    throw new Problem(unreachable, errors.map((x) => (x as Unreachable).details).join('\n'))
   }
+}
+
+async function devicesFromKnownPcs(): Promise<Device[]> {
+  const pcs = knownPcs()
+  if (pcs.length === 0) throw new Problem('Enter the name of a PC that runs Conductor.')
+  return firstAnswer(
+    pcs,
+    pcs.length === 1
+      ? `Couldn’t reach ${pcs[0]}. It may be off, asleep, or not on your tailnet.`
+      : 'Couldn’t reach any of your PCs. They may be off, asleep, or not on your tailnet.',
+  )
+}
+
+/** PCs that answer on the phone's Wi-Fi. None anywhere but the phone app. */
+export async function nearbyPcs(): Promise<NearbyPc[]> {
+  if (!isPhoneApp) return []
+  try {
+    return await invoke<NearbyPc[]>('nearby_pcs')
+  } catch (e) {
+    throw new Problem('Couldn’t look for PCs on this Wi-Fi.', String(e))
+  }
+}
+
+/** Asks PCs found on the phone's Wi-Fi for the device list. They're reached over Tailscale, like any other. */
+export function devicesFromNearby(found: NearbyPc[]): Promise<Device[]> {
+  return firstAnswer(
+    found.map((pc) => pc.address),
+    found.length === 1
+      ? `Found ${found[0].name} on this Wi-Fi, but couldn’t reach it over Tailscale. Check that Tailscale is on.`
+      : 'Found your PCs on this Wi-Fi, but couldn’t reach them over Tailscale. Check that Tailscale is on.',
+  )
 }
 
 async function call<T>(cmd: string, args?: InvokeArgs, options?: InvokeOptions): Promise<T> {
@@ -102,6 +130,10 @@ export function setPreviews(enabled: boolean): Promise<ControlStatus> {
 
 export function setAsk(enabled: boolean): Promise<ControlStatus> {
   return call('set_ask', { enabled })
+}
+
+export function setNearby(enabled: boolean): Promise<ControlStatus> {
+  return call('set_nearby', { enabled })
 }
 
 export function checkForUpdates(): Promise<ControlStatus> {

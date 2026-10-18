@@ -4,7 +4,16 @@
   import ProblemText from '../components/ProblemText.svelte'
   import Switch from '../components/Switch.svelte'
   import { Problem, toProblem } from '../lib/errors'
-  import { checkForUpdates, hostStatus, installUpdate, setAsk, setAutoUpdate, setHosting, setPreviews } from '../lib/platform'
+  import {
+    checkForUpdates,
+    hostStatus,
+    installUpdate,
+    setAsk,
+    setAutoUpdate,
+    setHosting,
+    setNearby,
+    setPreviews,
+  } from '../lib/platform'
   import type { ControlStatus } from '../lib/types'
 
   let { onback }: { onback: () => void } = $props()
@@ -20,6 +29,8 @@
   let askBusy = $state(false)
   let askError = $state<Problem | null>(null)
   let previewsError = $state<Problem | null>(null)
+  let nearbyBusy = $state(false)
+  let nearbyError = $state<Problem | null>(null)
   let version = $state('')
 
   async function refresh() {
@@ -81,6 +92,17 @@
       previewsError = toProblem(e, enabled ? 'Couldn’t turn on previews.' : 'Couldn’t turn off previews.')
     }
     previewsBusy = false
+  }
+
+  async function toggleNearby(enabled: boolean) {
+    nearbyBusy = true
+    nearbyError = null
+    try {
+      status = await setNearby(enabled)
+    } catch (e) {
+      nearbyError = toProblem(e, enabled ? 'Couldn’t turn this on.' : 'Couldn’t turn this off.')
+    }
+    nearbyBusy = false
   }
 
   async function runUpdate(action: () => Promise<ControlStatus>, failure: string) {
@@ -186,6 +208,23 @@
             labelledby="previews-label"
             describedby="previews-note"
             onchange={togglePreviews}
+          />
+        </div>
+      {/if}
+      {#if status?.hosting && status.nearby !== undefined}
+        <div class="row">
+          <span class="lead"><Icon name="nearby" /></span>
+          <div class="text">
+            <span class="label" id="nearby-label">Let phones on the same Wi-Fi find this PC</span>
+            <span class="note" id="nearby-note">Others on the same Wi-Fi can see that it runs Conductor, but only your devices can reach it.</span>
+            {#if nearbyError}<div class="note error" role="alert"><ProblemText problem={nearbyError} /></div>{/if}
+          </div>
+          <Switch
+            checked={status.nearby}
+            disabled={nearbyBusy}
+            labelledby="nearby-label"
+            describedby="nearby-note"
+            onchange={toggleNearby}
           />
         </div>
       {/if}

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod files;
 pub mod keys;
+pub mod nearby;
 
 /// Default TCP port for the host's HTTP API and web client.
 pub const DEFAULT_PORT: u16 = 4280;
@@ -35,6 +36,8 @@ pub enum ControlRequest {
     SetPreviews { enabled: bool },
     #[serde(rename_all = "camelCase")]
     SetAsk { enabled: bool },
+    #[serde(rename_all = "camelCase")]
+    SetNearby { enabled: bool },
     CheckForUpdates,
     /// Install the downloaded update now, even if the app is open or someone is connected.
     InstallUpdate,
@@ -60,6 +63,9 @@ pub struct ControlStatus {
     /// Someone at this PC has to allow each device that connects.
     #[serde(default)]
     pub ask: bool,
+    /// Phones on the same network can find this PC without being told its name.
+    #[serde(default)]
+    pub nearby: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

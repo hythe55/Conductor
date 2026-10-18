@@ -170,6 +170,7 @@ impl Supervisor {
             update: self.update.clone(),
             previews: self.settings.previews,
             ask: self.settings.ask,
+            nearby: self.settings.nearby,
         }
     }
 
@@ -387,6 +388,13 @@ async fn handle_client(pipe: NamedPipeServer, sup: Arc<Mutex<Supervisor>>, wake:
                     sup.settings.ask = enabled;
                     sup.settings.save()?;
                     tracing::info!("asking before each connection turned {}", if enabled { "on" } else { "off" });
+                }
+            }
+            ControlRequest::SetNearby { enabled } => {
+                if sup.settings.nearby != enabled {
+                    sup.settings.nearby = enabled;
+                    sup.settings.save()?;
+                    tracing::info!("announcing to nearby phones turned {}", if enabled { "on" } else { "off" });
                 }
             }
             ControlRequest::CheckForUpdates => {

@@ -17,6 +17,7 @@
     info: 'M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 1 0 0-11ZM8 7.5V11M8 5.2v.1',
     file: 'M9 2H4v12h8V5ZM9 2v3h3',
     ask: 'M2.5 3h11v7.5H8.5l-3 2.5v-2.5h-3Z',
+    nearby: 'M1.8 6.3a9 9 0 0 1 12.4 0M4.1 8.7a5.6 5.6 0 0 1 7.8 0M6.4 11.1a2.3 2.3 0 0 1 3.2 0M8 13.4v.1',
   }
   // Dots need a heavier stroke to be seen.
   const weights: Partial<Record<keyof typeof paths, number>> = { more: 2.5 }

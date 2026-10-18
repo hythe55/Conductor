@@ -161,11 +161,13 @@ pub struct Settings {
     pub previews: bool,
     /// Someone at this PC has to allow each device that connects.
     pub ask: bool,
+    /// Phones on the same network can find this PC without being told its name.
+    pub nearby: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { hosting: true, auto_update: true, previews: true, ask: false }
+        Self { hosting: true, auto_update: true, previews: true, ask: false, nearby: true }
     }
 }
 

@@ -106,6 +106,15 @@ export interface ControlStatus {
   previews?: boolean
   /** Someone at this PC has to allow each device that connects. From 0.1.12. */
   ask?: boolean
+  /** Phones on the same network can find this PC without being told its name. From 0.1.12. */
+  nearby?: boolean
+}
+
+/** A PC that answered on the phone's Wi-Fi. */
+export interface NearbyPc {
+  name: string
+  /** Its tailnet address. */
+  address: string
 }
 
 export type UpdateStatus =
