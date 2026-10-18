@@ -259,7 +259,7 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params, mut route_rx: mpsc::Re
             Some(ev) = events_rx.recv() => s.handle_pipeline(ev)?,
             Some(p) = sound_rx.recv() => s.send_sound(p)?,
             Some(route) = route_rx.recv() => {
-                tracing::debug!("route to the client: {route:?}");
+                tracing::info!("route to the client: {route:?}");
                 s.send(&HostMsg::Route { route: route.clone() });
                 s.route = Some(route);
             }

@@ -38,6 +38,19 @@ const FOLLOW_EVERY: Duration = Duration::from_millis(100);
 const SETTLE: Duration = Duration::from_millis(300);
 /// How long a window being restored from the taskbar gets to come back.
 const RESTORE_WAIT: Duration = Duration::from_secs(1);
+/// Video handed on can get this far ahead of what the connection has had time
+/// to carry before frames are skipped. More would only wait in the pacer's
+/// queue, and a queue there shows as seconds of stutter and delay.
+const MAX_BEHIND: Duration = Duration::from_millis(50);
+/// What the connection carries, as a multiple of the encoder's target: the
+/// session aims the encoder a little under its estimate.
+const CARRIED_OVER_TARGET: f64 = 1.15;
+/// Keyframes the client asks for come at most this often. Each is several times
+/// bigger than other frames, so a run of them would clog the connection that
+/// lost the picture in the first place.
+const KEYFRAME_GAP: Duration = Duration::from_millis(500);
+/// Trouble keeping up is logged at most this often.
+const NOTE_EVERY: Duration = Duration::from_secs(30);
 
 pub enum Control {
     Keyframe,
@@ -178,9 +191,12 @@ fn run(
         let mut settling: Option<(Option<Area>, Instant)> = None;
 
         let mut stats = Stats::new();
+        let mut backlog = Backlog::new();
+        // When this encoder last sent a keyframe.
+        let mut last_key: Option<Instant> = None;
         let result: Result<()> = (|| {
             while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                stats.report();
+                stats.report(config.bitrate);
                 if let Some(w) = config.window
                     && followed.elapsed() >= FOLLOW_EVERY
                 {
@@ -208,9 +224,13 @@ fn run(
                 }
                 while let Ok(c) = control.try_recv() {
                     match c {
-                        Control::Keyframe => want_key = true,
+                        Control::Keyframe => {
+                            stats.asked += 1;
+                            want_key = true;
+                        }
                         Control::Bitrate(b) => {
                             config.bitrate = b;
+                            stats.target(b);
                             if enc.set_bitrate(b) {
                                 enc_bitrate = b;
                             }
@@ -237,6 +257,8 @@ fn run(
                                 enc = new;
                                 enc_bitrate = o.bitrate;
                                 want_key = true;
+                                last_key = None;
+                                stats.restarts += 1;
                             }
                             Ok(Err(e)) => tracing::warn!("couldn't restart the encoder: {e:#}"),
                             Err(_) => tracing::warn!("couldn't restart the encoder"),
@@ -245,10 +267,13 @@ fn run(
                 }
                 for f in enc.poll()? {
                     stats.output(f.time);
+                    let size = f.data.len();
                     if out.try_send(PipelineEvent::Frame(f)).is_err() {
                         // Network side is backed up: drop and resync with a keyframe.
                         stats.dropped += 1;
                         want_key = true;
+                    } else {
+                        backlog.add(size);
                     }
                 }
                 if !enc.ready() {
@@ -277,7 +302,15 @@ fn run(
                     continue;
                 }
                 let refine_due = refine_left > 0 && last_submit.elapsed() >= REFINE_INTERVAL;
-                if !have_image || !(dirty || (want_key) || refine_due) {
+                let key_due = want_key && last_key.is_none_or(|t| t.elapsed() >= KEYFRAME_GAP);
+                if !have_image || !(dirty || key_due || refine_due) {
+                    continue;
+                }
+                if backlog.behind(config.bitrate, Instant::now()) > MAX_BEHIND {
+                    // Try again at the next frame, once more has gone out. Until then the
+                    // connection gets fewer frames rather than late ones.
+                    stats.skipped += 1;
+                    next_due = Instant::now() + frame_interval;
                     continue;
                 }
                 if !dirty && refine_due {
@@ -286,14 +319,21 @@ fn run(
                 let tex = conv.convert()?;
                 let time = start.elapsed().as_nanos() as i64 / 100;
                 stats.submitted(time);
-                for f in enc.encode(&tex, time, want_key)? {
+                if key_due {
+                    want_key = false;
+                    last_key = Some(Instant::now());
+                    stats.keyframes += 1;
+                }
+                for f in enc.encode(&tex, time, key_due)? {
                     stats.output(f.time);
+                    let size = f.data.len();
                     if out.try_send(PipelineEvent::Frame(f)).is_err() {
                         stats.dropped += 1;
                         want_key = true;
+                    } else {
+                        backlog.add(size);
                     }
                 }
-                want_key = false;
                 dirty = false;
                 last_submit = Instant::now();
                 // After a pause, start a new schedule rather than bursting to catch up.
@@ -383,13 +423,49 @@ fn restart_due(current: u32, wanted: u32, since_last: Duration) -> bool {
         || (ratio > RESTART_ABOVE && since_last >= RESTART_UP_AFTER)
 }
 
-/// Counts what the pipeline did, logged every few seconds at debug level.
+/// Encoded video handed on that the connection hasn't had time to carry yet,
+/// going by the encoder's target bitrate.
+struct Backlog {
+    bytes: f64,
+    at: Instant,
+}
+
+impl Backlog {
+    fn new() -> Self {
+        Self { bytes: 0.0, at: Instant::now() }
+    }
+
+    fn add(&mut self, bytes: usize) {
+        self.bytes += bytes as f64;
+    }
+
+    /// How long what's left takes to go out, with the encoder aimed at `bitrate`.
+    fn behind(&mut self, bitrate: u32, now: Instant) -> Duration {
+        let rate = bitrate.max(1) as f64 * CARRIED_OVER_TARGET / 8.0;
+        self.bytes = (self.bytes - rate * now.saturating_duration_since(self.at).as_secs_f64()).max(0.0);
+        self.at = now;
+        Duration::from_secs_f64(self.bytes / rate)
+    }
+}
+
+/// Counts what the pipeline did, logged every few seconds at debug level, and
+/// at info level when it had trouble keeping up.
 struct Stats {
     since: Instant,
     captured: u32,
     encoded: u32,
     sent: u32,
     dropped: u32,
+    /// Frames left out because the connection hadn't caught up.
+    skipped: u32,
+    keyframes: u32,
+    /// Keyframes the client asked for.
+    asked: u32,
+    restarts: u32,
+    /// Lowest and highest encoder target.
+    targets: Option<(u32, u32)>,
+    /// When trouble was last logged at info level.
+    noted: Option<Instant>,
     waiting: Duration,
     latency: Duration,
     latency_max: Duration,
@@ -405,6 +481,12 @@ impl Stats {
             encoded: 0,
             sent: 0,
             dropped: 0,
+            skipped: 0,
+            keyframes: 0,
+            asked: 0,
+            restarts: 0,
+            targets: None,
+            noted: None,
             waiting: Duration::ZERO,
             latency: Duration::ZERO,
             latency_max: Duration::ZERO,
@@ -432,10 +514,32 @@ impl Stats {
         }
     }
 
-    fn report(&mut self) {
+    fn target(&mut self, bitrate: u32) {
+        let (low, high) = self.targets.unwrap_or((bitrate, bitrate));
+        self.targets = Some((low.min(bitrate), high.max(bitrate)));
+    }
+
+    fn report(&mut self, bitrate: u32) {
         let elapsed = self.since.elapsed();
         if elapsed < STATS_EVERY {
             return;
+        }
+        // A few skipped frames and a keyframe or two are usual as the picture starts.
+        let trouble = self.skipped * 20 > self.captured || self.dropped > 0 || self.asked > 2 || self.restarts > 0;
+        if trouble && self.noted.is_none_or(|t| t.elapsed() >= NOTE_EVERY) {
+            self.noted = Some(Instant::now());
+            let (low, high) = self.targets.unwrap_or((bitrate, bitrate));
+            tracing::info!(
+                "video couldn't keep up for a moment: skipped {} of {} frames, dropped {}, {} keyframes ({} asked for), {} encoder restarts, target {:.1} to {:.1} Mbps",
+                self.skipped,
+                self.captured,
+                self.dropped,
+                self.keyframes,
+                self.asked,
+                self.restarts,
+                low.min(bitrate) as f64 / 1e6,
+                high.max(bitrate) as f64 / 1e6,
+            );
         }
         if tracing::enabled!(tracing::Level::DEBUG) {
             let secs = elapsed.as_secs_f64();
@@ -452,14 +556,28 @@ impl Stats {
             );
         }
         let in_flight = std::mem::take(&mut self.in_flight);
+        let noted = self.noted;
         *self = Self::new();
         self.in_flight = in_flight;
+        self.noted = noted;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backlog_drains_at_a_little_over_the_target() {
+        let start = Instant::now();
+        let mut backlog = Backlog { bytes: 0.0, at: start };
+        // A 100 KB keyframe at 8 Mbps takes 87 ms to go out.
+        backlog.add(100_000);
+        let behind = backlog.behind(8_000_000, start);
+        assert!((86..=88).contains(&behind.as_millis()), "{behind:?}");
+        assert!(backlog.behind(8_000_000, start + Duration::from_millis(50)).as_millis() < 40);
+        assert_eq!(backlog.behind(8_000_000, start + Duration::from_millis(200)), Duration::ZERO);
+    }
 
     #[test]
     fn restarts_only_for_big_changes_and_not_too_often() {

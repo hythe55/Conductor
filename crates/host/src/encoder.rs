@@ -204,6 +204,11 @@ impl Encoder {
                 _ = c.SetValue(&CODECAPI_AVLowLatencyMode, &variant_bool(true));
                 _ = c.SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &variant_u32(0));
                 _ = c.SetValue(&CODECAPI_AVEncMPVGOPSize, &variant_u32(fps * 60));
+                // A buffer of one frame's worth of bits keeps every frame near its share of
+                // the bitrate. Keyframes otherwise come out several times bigger (100 KB and
+                // more at 8 Mbps) and hold up the frames behind them on a busy connection;
+                // capped, they start a little soft and the next frames sharpen them.
+                _ = c.SetValue(&CODECAPI_AVEncCommonBufferSize, &variant_u32(bitrate / fps));
             }
 
             let out = MFCreateMediaType()?;
