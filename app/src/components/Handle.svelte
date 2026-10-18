@@ -580,6 +580,11 @@
     border-radius: var(--radius);
     background: var(--overlay-solid);
     color: var(--overlay-text);
+    /* On a short screen, like a phone held sideways, the menu scrolls. */
+    max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 22px - 2 * var(--space-2));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
   }
 
   .problem {
@@ -695,6 +700,7 @@
 
     .panel {
       top: calc(env(safe-area-inset-top) + 28px + var(--space-2));
+      max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 28px - 2 * var(--space-2));
     }
 
     /* A finger-sized target without a bigger handle over the remote screen. */

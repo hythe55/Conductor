@@ -32,6 +32,8 @@ interface Point {
 export interface TouchInputOptions {
   /** Width of the remote display in its own pixels, so scrolling follows the finger. */
   displayWidth(): number
+  /** After a tap clicked, from within the tap, so the phone keyboard can be opened. */
+  onTap?(): void
 }
 
 export function attachTouchInput(
@@ -326,6 +328,7 @@ export function attachTouchInput(
     if (mode === 'press' && fingers.size === 1 && !cancelled && now - start.at < TAP_MS) {
       if (showCursor) {
         click('left')
+        opts.onTap?.()
       } else {
         // The first tap shows where the pointer is instead of clicking somewhere unseen.
         showCursor = true

@@ -68,6 +68,11 @@
   let keyboardOpen = $state(false)
   // The remote pointer's shape, shown in place of this device's pointer.
   let cursor = $state('default')
+  // The pointer drawn for fingers takes the remote pointer's shape where there's one to draw.
+  const drawn = $derived(
+    cursor === 'text' ? 'text' : cursor === 'pointer' ? 'hand' : cursor.endsWith('-resize') ? 'resize' : 'default',
+  )
+  const RESIZE_TURN: Record<string, number> = { 'ns-resize': 90, 'nwse-resize': 45, 'nesw-resize': -45 }
   // Height of the part of the window the phone keyboard leaves uncovered.
   let viewHeight = $state<number | null>(null)
 
@@ -174,13 +179,15 @@
     else shareClipboard(await readClipboard())
   }
 
-  const dpr = window.devicePixelRatio || 1
+  // Either way round, since a phone held upright shows a wide screen across its
+  // short side, and can be turned or zoomed in to see it at full size.
+  const longSide = Math.round(Math.max(screen.width, screen.height) * (window.devicePixelRatio || 1))
   const session = new RemoteSession(
     start.url,
     {
       display: start.display || undefined,
-      maxWidth: Math.round(screen.width * dpr),
-      maxHeight: Math.round(screen.height * dpr),
+      maxWidth: longSide,
+      maxHeight: longSide,
       sharp: start.sharp ? untrack(() => sharp) : undefined,
     },
     {
@@ -288,6 +295,10 @@
     const detachTouch = attachTouchInput(surface, video, pointer, send, {
       displayWidth: () =>
         shownWindow?.width || displays.find((d) => d.id === activeDisplay)?.width || video.videoWidth || 1920,
+      // Tapping where text can be typed brings up the phone's keyboard.
+      onTap: () => {
+        if (cursor === 'text' && !keyboardOpen) keyboard.show()
+      },
     })
     surface.focus()
     return () => {
@@ -543,15 +554,41 @@
 
   <audio bind:this={speaker} muted={!sound}></audio>
 
-  <div class="pointer" bind:this={pointer} hidden aria-hidden="true">
-    <svg width="20" height="20" viewBox="0 0 20 20">
-      <path
-        d="M1.5 1.5v14.5l3.8-3.7 2.6 6.1 2.6-1.1-2.6-6h5.3z"
-        fill="#fff"
-        stroke="#000"
-        stroke-width="1.2"
-        stroke-linejoin="round"
-      />
+  <div class="pointer {drawn}" bind:this={pointer} hidden aria-hidden="true">
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 20 20"
+      style:rotate={drawn === 'resize' ? `${RESIZE_TURN[cursor] ?? 0}deg` : null}
+    >
+      {#if drawn === 'text'}
+        <path d="M7 2.5h6M10 2.5v15M7 17.5h6" fill="none" stroke="#000" stroke-width="3.6" stroke-linecap="round" />
+        <path d="M7 2.5h6M10 2.5v15M7 17.5h6" fill="none" stroke="#fff" stroke-width="1.4" stroke-linecap="round" />
+      {:else if drawn === 'hand'}
+        <path
+          d="M6.5 12V3a1.5 1.5 0 0 1 3 0v5a1.5 1.5 0 0 1 3 0v.5a1.5 1.5 0 0 1 3 0v.5a1.5 1.5 0 0 1 3 0V14c0 3-2 5-5 5h-2c-2 0-3-1-4.5-3L2.9 12.3a1.4 1.4 0 0 1 2.1-1.8z"
+          fill="#fff"
+          stroke="#000"
+          stroke-width="1.2"
+          stroke-linejoin="round"
+        />
+      {:else if drawn === 'resize'}
+        <path
+          d="M1.5 10l4-4v2.5h9V6l4 4-4 4v-2.5h-9V14z"
+          fill="#fff"
+          stroke="#000"
+          stroke-width="1.2"
+          stroke-linejoin="round"
+        />
+      {:else}
+        <path
+          d="M1.5 1.5v14.5l3.8-3.7 2.6 6.1 2.6-1.1-2.6-6h5.3z"
+          fill="#fff"
+          stroke="#000"
+          stroke-width="1.2"
+          stroke-linejoin="round"
+        />
+      {/if}
     </svg>
   </div>
 
@@ -673,6 +710,16 @@
     left: 0;
     margin: -1.5px 0 0 -1.5px;
     pointer-events: none;
+  }
+
+  /* Each shape sits with the point it acts at over the remote pointer. */
+  .pointer.text,
+  .pointer.resize {
+    margin: -10px 0 0 -10px;
+  }
+
+  .pointer.hand {
+    margin: -1.5px 0 0 -8px;
   }
 
   video {
