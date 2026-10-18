@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,6 +14,10 @@ use tokio::sync::Mutex;
 const DEVICES_TTL: Duration = Duration::from_secs(5);
 const STATUS_TTL: Duration = Duration::from_secs(30);
 const ROUTE_TTL: Duration = Duration::from_secs(5);
+/// How long a device someone at this PC let in may connect again without being
+/// asked about, after its session ends: long enough to get back after a dropped
+/// connection.
+const ALLOWED_FOR: Duration = Duration::from_secs(120);
 
 pub struct AppState {
     /// Display name, e.g. `MSI`.
@@ -24,8 +28,10 @@ pub struct AppState {
     pub tailscale_ip: IpAddr,
     pub gate: Gate,
     pub web_dir: PathBuf,
-    /// Sessions in progress, by id, with the name of the device on the other end.
-    sessions: std::sync::Mutex<Vec<(u64, String)>>,
+    /// Sessions in progress, by id, with the name and address of the device on the other end.
+    sessions: std::sync::Mutex<Vec<(u64, String, IpAddr)>>,
+    /// Devices someone at this PC let in, until when they may connect again without asking.
+    allowed: std::sync::Mutex<HashMap<IpAddr, Instant>>,
     next_session: AtomicU64,
     status: Mutex<(Status, Instant)>,
     devices: Mutex<Option<(Vec<Device>, Instant)>>,
@@ -45,6 +51,7 @@ impl AppState {
             gate: Gate::new(&status)?,
             web_dir,
             sessions: std::sync::Mutex::new(Vec::new()),
+            allowed: std::sync::Mutex::new(HashMap::new()),
             next_session: AtomicU64::new(1),
             own_hosts: RwLock::new(own_hosts(&status)),
             status: Mutex::new((status, Instant::now())),
@@ -54,15 +61,28 @@ impl AppState {
         Ok(state)
     }
 
-    pub fn session_started(self: &Arc<Self>, controller: String) -> SessionGuard {
+    pub fn session_started(self: &Arc<Self>, controller: String, peer: IpAddr) -> SessionGuard {
         let id = self.next_session.fetch_add(1, Ordering::Relaxed);
-        self.sessions.lock().unwrap().push((id, controller));
+        self.sessions.lock().unwrap().push((id, controller, peer));
         SessionGuard(self.clone(), id)
     }
 
     /// Names of the devices with a session open, in the order they connected.
     pub fn controllers(&self) -> Vec<String> {
-        self.sessions.lock().unwrap().iter().map(|(_, name)| name.clone()).collect()
+        self.sessions.lock().unwrap().iter().map(|(_, name, _)| name.clone()).collect()
+    }
+
+    /// Someone at this PC let `peer` in.
+    pub fn allow(&self, peer: IpAddr) {
+        let mut allowed = self.allowed.lock().unwrap();
+        allowed.retain(|_, until| *until > Instant::now());
+        allowed.insert(peer, Instant::now() + ALLOWED_FOR);
+    }
+
+    /// `peer` has a session open, or was let in a moment ago, so it needn't be asked about.
+    pub fn allowed(&self, peer: IpAddr) -> bool {
+        self.sessions.lock().unwrap().iter().any(|(_, _, p)| *p == peer)
+            || self.allowed.lock().unwrap().get(&peer).is_some_and(|until| *until > Instant::now())
     }
 
     async fn status(&self) -> Status {
@@ -147,6 +167,11 @@ pub struct SessionGuard(Arc<AppState>, u64);
 
 impl Drop for SessionGuard {
     fn drop(&mut self) {
-        self.0.sessions.lock().unwrap().retain(|(id, _)| *id != self.1);
+        let mut sessions = self.0.sessions.lock().unwrap();
+        if let Some(at) = sessions.iter().position(|(id, _, _)| *id == self.1) {
+            let (_, _, peer) = sessions.remove(at);
+            // So a dropped connection comes back without asking again.
+            self.0.allowed.lock().unwrap().insert(peer, Instant::now() + ALLOWED_FOR);
+        }
     }
 }

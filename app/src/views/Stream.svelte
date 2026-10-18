@@ -27,6 +27,7 @@
     displays: info.displays,
     display: info.displays.find((d) => d.primary)?.id ?? info.displays[0]?.id ?? '',
     sharp: !!info.sharp,
+    asks: !!info.ask,
   }))
 
   let phase = $state<SessionState>('connecting')
@@ -242,6 +243,7 @@
         void syncClipboard()
       },
     },
+    start.asks,
   )
   session.connect()
 
@@ -586,7 +588,7 @@
     </div>
   {:else if !hasVideo}
     <div class="notice quiet" aria-live="polite">
-      <p>Connecting to {info.name}…</p>
+      <p>{start.asks ? `Waiting for someone at ${info.name} to allow it…` : `Connecting to ${info.name}…`}</p>
     </div>
   {/if}
 

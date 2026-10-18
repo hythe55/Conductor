@@ -3,11 +3,14 @@ import type { Device, HostInfo, PowerAction, PowerSchedule, WakeAdapter, WakeInf
 
 /** The PC didn't answer at all. */
 export class Unreachable extends Problem {}
+/** Someone at the PC didn't let this device in, or nobody answered. */
+export class Refused extends Problem {}
 
 /** Base URL of a host's API. Empty string means the host serving this page. */
 export type HostUrl = string
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
+/** `refusal` is a status whose body is a sentence for people, thrown as {@link Refused}. */
+async function request<T>(url: string, init?: RequestInit, refusal?: number): Promise<T> {
   let res: Response
   try {
     res = await fetch(url, { ...init, signal: init?.signal ?? AbortSignal.timeout(8000) })
@@ -18,6 +21,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     )
   }
   const detail = async () => `${res.status} ${res.statusText}: ${(await res.text().catch(() => '')).trim()}`
+  if (res.status === refusal) throw new Refused((await res.text().catch(() => '')).trim() || 'It wasn’t allowed.')
   if (res.status === 403) {
     throw new Problem(
       "This device isn't allowed to control that PC. Both need to be signed in to the same Tailscale account.",
@@ -38,6 +42,8 @@ export function devices(host: HostUrl): Promise<Device[]> {
 }
 
 export const PORT = 4280
+/** How long a host that asks waits for someone at the PC to answer. */
+export const ASK_WAIT_SECS = 30
 
 /** Where to reach a device's API from this page. */
 export function deviceUrl(d: Device): HostUrl {
@@ -58,12 +64,18 @@ export interface SessionOptions {
   sharp?: boolean
 }
 
-export async function createSession(host: HostUrl, sdp: string, opts: SessionOptions): Promise<string> {
-  const res = await request<{ sdp: string }>(`${host}/api/session`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ sdp, ...opts }),
-  })
+/** With `asks`, someone at the PC may first have to allow it. */
+export async function createSession(host: HostUrl, sdp: string, opts: SessionOptions, asks = false): Promise<string> {
+  const res = await request<{ sdp: string }>(
+    `${host}/api/session`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sdp, ...opts }),
+      signal: AbortSignal.timeout(asks ? (ASK_WAIT_SECS + 15) * 1000 : 8000),
+    },
+    409,
+  )
   return res.sdp
 }
 

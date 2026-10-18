@@ -46,6 +46,11 @@ export interface HostInfo {
   paste?: boolean
   /** Takes `sharp` when a session starts, and `setSharp` messages. From 0.1.12. */
   sharp?: boolean
+  /**
+   * Someone at this PC has to allow each device that connects, so starting a
+   * session can take a while. A refusal is a 409 with a sentence saying why. From 0.1.12.
+   */
+  ask?: boolean
 }
 
 /** Something a PC does on its own at a set time, unless it's in use. */
@@ -99,6 +104,8 @@ export interface ControlStatus {
   update: UpdateStatus
   /** Other devices show a picture of this PC's screen. */
   previews?: boolean
+  /** Someone at this PC has to allow each device that connects. From 0.1.12. */
+  ask?: boolean
 }
 
 export type UpdateStatus =

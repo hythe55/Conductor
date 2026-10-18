@@ -92,7 +92,7 @@ pub async fn start(state: Arc<AppState>, bind_ip: IpAddr, params: Params) -> Res
     rtc.bwe().set_desired_bitrate(Bitrate::bps(MAX_BITRATE as u64));
 
     tokio::spawn(async move {
-        let _guard = state.session_started(params.controller.clone());
+        let _guard = state.session_started(params.controller.clone(), params.peer);
         let (route_tx, route_rx) = mpsc::channel(1);
         tokio::spawn(watch_route(state.clone(), params.peer, route_tx));
         if let Err(e) = run(rtc, socket, params, route_rx).await {

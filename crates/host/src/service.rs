@@ -169,6 +169,7 @@ impl Supervisor {
             auto_update: self.settings.auto_update,
             update: self.update.clone(),
             previews: self.settings.previews,
+            ask: self.settings.ask,
         }
     }
 
@@ -379,6 +380,13 @@ async fn handle_client(pipe: NamedPipeServer, sup: Arc<Mutex<Supervisor>>, wake:
                     sup.settings.previews = enabled;
                     sup.settings.save()?;
                     tracing::info!("previews turned {}", if enabled { "on" } else { "off" });
+                }
+            }
+            ControlRequest::SetAsk { enabled } => {
+                if sup.settings.ask != enabled {
+                    sup.settings.ask = enabled;
+                    sup.settings.save()?;
+                    tracing::info!("asking before each connection turned {}", if enabled { "on" } else { "off" });
                 }
             }
             ControlRequest::CheckForUpdates => {

@@ -8,6 +8,7 @@
 //! conductor-host agent        started by the service in the console session
 //! ```
 
+mod ask;
 mod audio;
 mod block;
 mod capture;

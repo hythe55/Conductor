@@ -19,6 +19,9 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// Named pipe the Conductor service listens on for the local app.
 pub const CONTROL_PIPE: &str = r"\\.\pipe\conductor";
 
+/// How long a host waits for someone at the PC to allow a session, when it asks.
+pub const ASK_WAIT_SECS: u64 = 30;
+
 /// One JSON line sent by the local app to the service.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "camelCase")]
@@ -30,6 +33,8 @@ pub enum ControlRequest {
     SetAutoUpdate { enabled: bool },
     #[serde(rename_all = "camelCase")]
     SetPreviews { enabled: bool },
+    #[serde(rename_all = "camelCase")]
+    SetAsk { enabled: bool },
     CheckForUpdates,
     /// Install the downloaded update now, even if the app is open or someone is connected.
     InstallUpdate,
@@ -52,6 +57,9 @@ pub struct ControlStatus {
     /// Other devices show a picture of this PC's screen in their device lists.
     #[serde(default)]
     pub previews: bool,
+    /// Someone at this PC has to allow each device that connects.
+    #[serde(default)]
+    pub ask: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -109,6 +117,11 @@ pub struct HostInfo {
     /// Takes [`SessionRequest::sharp`] and [`ClientMsg::SetSharp`]. Hosts from 0.1.12.
     #[serde(default)]
     pub sharp: bool,
+    /// Someone at this PC has to allow each device that connects, so a new
+    /// session can take [`ASK_WAIT_SECS`] and more to start. Refused with 409
+    /// Conflict and a sentence saying why. Hosts from 0.1.12.
+    #[serde(default)]
+    pub ask: bool,
 }
 
 /// Something a PC does on its own at a set time, unless it's in use.

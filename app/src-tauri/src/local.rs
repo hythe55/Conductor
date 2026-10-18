@@ -71,6 +71,11 @@ pub async fn set_previews(enabled: bool) -> Result<ControlStatus, Problem> {
 }
 
 #[tauri::command]
+pub async fn set_ask(enabled: bool) -> Result<ControlStatus, Problem> {
+    request(ControlRequest::SetAsk { enabled }).await
+}
+
+#[tauri::command]
 pub async fn check_for_updates() -> Result<ControlStatus, Problem> {
     request(ControlRequest::CheckForUpdates).await
 }

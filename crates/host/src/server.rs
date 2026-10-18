@@ -16,6 +16,7 @@ use conductor_proto::{
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
+use crate::ask::Answer;
 use crate::session;
 use crate::settings::Settings;
 use crate::state::AppState;
@@ -140,6 +141,7 @@ async fn devices(State(state): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 }
 
 pub fn host_info(state: &AppState) -> HostInfo {
+    let settings = Settings::load();
     HostInfo {
         name: state.name.clone(),
         version: env!("CARGO_PKG_VERSION").into(),
@@ -148,11 +150,12 @@ pub fn host_info(state: &AppState) -> HostInfo {
         displays: crate::capture::displays().unwrap_or_default(),
         controllers: state.controllers(),
         wake: Some(crate::wake::info()),
-        preview: Settings::load().previews,
+        preview: settings.previews,
         schedule: Some(crate::schedule::load()),
         pen: true,
         paste: true,
         sharp: true,
+        ask: settings.ask,
     }
 }
 
@@ -220,8 +223,27 @@ async fn create_session(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<SessionRequest>,
 ) -> Result<Json<SessionResponse>, (StatusCode, String)> {
+    let controller = state.device_name(peer.ip()).await;
+    if Settings::load().ask && !state.allowed(peer.ip()) {
+        let refused = |why: String| Err((StatusCode::CONFLICT, why));
+        match crate::ask::ask(controller.clone(), peer.ip()).await {
+            Some(Answer::Allowed) => {
+                tracing::info!("someone at this PC let {controller} in");
+                state.allow(peer.ip());
+            }
+            Some(Answer::Declined) => {
+                tracing::info!("someone at this PC didn't let {controller} in");
+                return refused(format!("Someone at {} didn’t allow it.", state.name));
+            }
+            Some(Answer::Unanswered) => {
+                tracing::info!("nobody at this PC answered whether {controller} may connect");
+                return refused(format!("Nobody at {} answered in time, so it wasn’t allowed.", state.name));
+            }
+            None => return refused(format!("Someone at {} is being asked already.", state.name)),
+        }
+    }
     let params = session::Params {
-        controller: state.device_name(peer.ip()).await,
+        controller,
         peer: peer.ip(),
         offer: req.sdp,
         display: req.display,

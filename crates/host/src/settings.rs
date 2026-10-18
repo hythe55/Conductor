@@ -159,11 +159,13 @@ pub struct Settings {
     pub auto_update: bool,
     /// The owner's other devices show a small picture of this PC's screen in their device lists.
     pub previews: bool,
+    /// Someone at this PC has to allow each device that connects.
+    pub ask: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { hosting: true, auto_update: true, previews: true }
+        Self { hosting: true, auto_update: true, previews: true, ask: false }
     }
 }
 

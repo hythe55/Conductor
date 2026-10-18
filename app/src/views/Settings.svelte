@@ -4,7 +4,7 @@
   import ProblemText from '../components/ProblemText.svelte'
   import Switch from '../components/Switch.svelte'
   import { Problem, toProblem } from '../lib/errors'
-  import { checkForUpdates, hostStatus, installUpdate, setAutoUpdate, setHosting, setPreviews } from '../lib/platform'
+  import { checkForUpdates, hostStatus, installUpdate, setAsk, setAutoUpdate, setHosting, setPreviews } from '../lib/platform'
   import type { ControlStatus } from '../lib/types'
 
   let { onback }: { onback: () => void } = $props()
@@ -17,6 +17,8 @@
   let updateError = $state<Problem | null>(null)
   let autoUpdateError = $state<Problem | null>(null)
   let previewsBusy = $state(false)
+  let askBusy = $state(false)
+  let askError = $state<Problem | null>(null)
   let previewsError = $state<Problem | null>(null)
   let version = $state('')
 
@@ -57,6 +59,17 @@
       error = toProblem(e, enabled ? 'Couldn’t turn this on.' : 'Couldn’t turn this off.')
     }
     busy = false
+  }
+
+  async function toggleAsk(enabled: boolean) {
+    askBusy = true
+    askError = null
+    try {
+      status = await setAsk(enabled)
+    } catch (e) {
+      askError = toProblem(e, enabled ? 'Couldn’t turn on asking.' : 'Couldn’t turn off asking.')
+    }
+    askBusy = false
   }
 
   async function togglePreviews(enabled: boolean) {
@@ -142,6 +155,23 @@
           onchange={toggle}
         />
       </div>
+      {#if status?.hosting && status.ask !== undefined}
+        <div class="row">
+          <span class="lead"><Icon name="ask" /></span>
+          <div class="text">
+            <span class="label" id="ask-label">Ask before a device connects</span>
+            <span class="note" id="ask-note">Someone at this PC has 30 seconds to allow it. If nobody does, it can’t connect.</span>
+            {#if askError}<div class="note error" role="alert"><ProblemText problem={askError} /></div>{/if}
+          </div>
+          <Switch
+            checked={status.ask}
+            disabled={askBusy}
+            labelledby="ask-label"
+            describedby="ask-note"
+            onchange={toggleAsk}
+          />
+        </div>
+      {/if}
       {#if status?.hosting && status.previews !== undefined}
         <div class="row">
           <span class="lead"><Icon name="eye" /></span>

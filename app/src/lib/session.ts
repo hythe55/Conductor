@@ -1,4 +1,4 @@
-import { createSession, type HostUrl, type SessionOptions } from './api'
+import { createSession, Refused, type HostUrl, type SessionOptions } from './api'
 import { Problem, toProblem } from './errors'
 import type { ClientMsg, HostMsg } from './types'
 
@@ -58,6 +58,8 @@ export class RemoteSession {
     private host: HostUrl,
     options: SessionOptions,
     private handlers: SessionHandlers,
+    /** Someone at the PC may have to allow each connection. */
+    private asks = false,
   ) {
     this.options = { ...options }
   }
@@ -118,12 +120,13 @@ export class RemoteSession {
     try {
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
-      const answer = await createSession(this.host, offer.sdp!, this.options)
+      const answer = await createSession(this.host, offer.sdp!, this.options, this.asks)
       if (this.pc !== pc) return
       await pc.setRemoteDescription({ type: 'answer', sdp: answer })
     } catch (e) {
       if (this.pc !== pc) return
-      if (this.attempt === 0) {
+      // Asking again, over and over, wouldn't help.
+      if (this.attempt === 0 || e instanceof Refused) {
         this.handlers.onState('failed', toProblem(e, 'Couldn’t start the connection. Try again.'))
         this.teardown()
       } else {

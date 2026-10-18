@@ -100,6 +100,10 @@ export function setPreviews(enabled: boolean): Promise<ControlStatus> {
   return call('set_previews', { enabled })
 }
 
+export function setAsk(enabled: boolean): Promise<ControlStatus> {
+  return call('set_ask', { enabled })
+}
+
 export function checkForUpdates(): Promise<ControlStatus> {
   return call('check_for_updates')
 }
