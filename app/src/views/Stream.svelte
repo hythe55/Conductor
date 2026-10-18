@@ -3,7 +3,7 @@
   import { Problem } from '../lib/errors'
   import { attachDesktopInput } from '../lib/input'
   import { RemoteSession, type SessionState, type Stats } from '../lib/session'
-  import { readClipboard, stillHoldsImage, writeClipboard } from '../lib/platform'
+  import { readClipboard, stillHoldsImage, takeShortcuts, writeClipboard } from '../lib/platform'
   import { share } from '../lib/share.svelte'
   import { attachTouchInput } from '../lib/touch'
   import { Transfers } from '../lib/transfers.svelte'
@@ -277,12 +277,14 @@
       onPasteFiles: info.paste ? pasteFiles : undefined,
       pen: !!info.pen,
     })
+    const releaseShortcuts = takeShortcuts(surface, (code, down) => send({ t: 'key', code, down }))
     const detachTouch = attachTouchInput(surface, video, pointer, send, {
       displayWidth: () =>
         shownWindow?.width || displays.find((d) => d.id === activeDisplay)?.width || video.videoWidth || 1920,
     })
     surface.focus()
     return () => {
+      releaseShortcuts()
       detachDesktop()
       detachTouch()
     }

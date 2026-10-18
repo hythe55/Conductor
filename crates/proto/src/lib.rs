@@ -8,6 +8,7 @@ use std::net::Ipv4Addr;
 use serde::{Deserialize, Serialize};
 
 pub mod files;
+pub mod keys;
 
 /// Default TCP port for the host's HTTP API and web client.
 pub const DEFAULT_PORT: u16 = 4280;

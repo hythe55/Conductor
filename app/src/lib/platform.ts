@@ -1,4 +1,4 @@
-import { invoke, type InvokeArgs, type InvokeOptions } from '@tauri-apps/api/core'
+import { Channel, invoke, type InvokeArgs, type InvokeOptions } from '@tauri-apps/api/core'
 import { android, toBase64 } from './android'
 import { devices as fetchDevices, PORT, Unreachable } from './api'
 import { Problem, toProblem } from './errors'
@@ -171,6 +171,48 @@ export async function stillHoldsImage(): Promise<boolean> {
     (sequence) => sequence === imageSequence,
     () => false,
   )
+}
+
+/**
+ * In the desktop app, takes keys Windows would act on itself, like Alt+Tab and
+ * the Windows key, while `surface` has focus, and gives them to `send` instead.
+ * Browsers can only do this in full screen, with the keyboard lock.
+ */
+export function takeShortcuts(surface: HTMLElement, send: (code: string, down: boolean) => void): () => void {
+  if (!isDesktopApp) return () => {}
+  type Key = { code: string; down: boolean }
+  const held = new Set<string>()
+  let keys: Channel<Key> | null = null
+  const start = () => {
+    if (keys) return
+    const channel = new Channel<Key>()
+    channel.onmessage = ({ code, down }) => {
+      if (keys !== channel) return
+      if (down) held.add(code)
+      else held.delete(code)
+      send(code, down)
+    }
+    keys = channel
+    invoke('capture_keys', { keys: channel }).catch(() => {
+      if (keys === channel) keys = null
+    })
+  }
+  const stop = () => {
+    if (!keys) return
+    keys = null
+    invoke('release_keys').catch(() => {})
+    // Let go of them on the other PC too.
+    for (const code of held) send(code, false)
+    held.clear()
+  }
+  surface.addEventListener('focus', start)
+  surface.addEventListener('blur', stop)
+  if (document.activeElement === surface) start()
+  return () => {
+    surface.removeEventListener('focus', start)
+    surface.removeEventListener('blur', stop)
+    stop()
+  }
 }
 
 /** Whether saved files go straight into the Downloads folder, rather than being downloaded. */

@@ -1,10 +1,12 @@
 //! Conductor app shell. The interface is the same web client every host
 //! serves; this adds what a browser can't do on its own: read the tailnet
-//! device list, switch hosting for this PC on or off, and save files from
-//! the PC being controlled.
+//! device list, switch hosting for this PC on or off, save files from the
+//! PC being controlled, and send it shortcuts like Alt+Tab.
 
 #[cfg(windows)]
 mod downloads;
+#[cfg(windows)]
+mod keys;
 #[cfg(windows)]
 mod local;
 
@@ -42,6 +44,8 @@ pub fn run() {
         local::write_clipboard,
         local::write_clipboard_image,
         local::clipboard_sequence,
+        keys::capture_keys,
+        keys::release_keys,
         downloads::begin_save,
         downloads::write_save,
         downloads::end_save,
