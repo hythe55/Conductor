@@ -61,10 +61,9 @@ impl Announcement {
         let value = HSTRING::from(address.to_string());
         let keys = [PCWSTR(key.as_ptr())];
         let values = [PCWSTR(value.as_ptr())];
-        let (port, priority, weight) = (DEFAULT_PORT, 0, 0);
-        let instance = unsafe {
-            DnsServiceConstructInstance(&instance, &host, None, None, port, priority, weight, 1, keys.as_ptr(), values.as_ptr())
-        };
+        let (keys, values) = (keys.as_ptr(), values.as_ptr());
+        let instance =
+            unsafe { DnsServiceConstructInstance(&instance, &host, None, None, DEFAULT_PORT, 0, 0, 1, keys, values) };
         if instance.is_null() {
             return Err(0);
         }
