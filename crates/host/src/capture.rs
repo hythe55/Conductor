@@ -1,7 +1,10 @@
 //! Display enumeration and capture through DXGI Desktop Duplication.
 //!
 //! Desktop Duplication only hands out a frame when something on screen
-//! changed, so an idle desktop costs nothing to capture.
+//! changed, so an idle desktop costs nothing to capture. Everyone watching a
+//! display shares its capture.
+
+use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{Context, Result, bail};
 use conductor_proto::DisplayInfo;
@@ -117,47 +120,38 @@ pub enum Frame {
     Unchanged,
 }
 
-pub struct Capture {
-    pub device: ID3D11Device,
-    pub context: ID3D11DeviceContext,
-    pub luid: LUID,
-    pub width: u32,
-    pub height: u32,
-    pub id: String,
-    pub origin: (i32, i32),
+/// Windows lets a program duplicate each display only once, so everyone
+/// watching a display shares its duplication, latest image and device.
+struct Shared {
+    device: ID3D11Device,
+    context: ID3D11DeviceContext,
+    luid: LUID,
+    width: u32,
+    height: u32,
+    origin: (i32, i32),
     output: IDXGIOutput,
-    dup: Option<IDXGIOutputDuplication>,
-    /// Our own copy of the latest frame, so the duplication frame can be
-    /// released right away and the image re-encoded later on request.
-    pub texture: ID3D11Texture2D,
+    texture: ID3D11Texture2D,
+    state: Mutex<State>,
 }
 
-impl Capture {
-    pub fn new(display: Option<&str>) -> Result<Self> {
-        crate::desktop::follow_input();
-        let out = find_output(display)?;
-        let (device, context) = create_device(&out.adapter)?;
-        let r = out.desc.DesktopCoordinates;
-        let (width, height) = ((r.right - r.left) as u32, (r.bottom - r.top) as u32);
-        let texture = create_bgra(&device, width, height)?;
-        let mut cap = Self {
-            id: device_name(&out.desc),
-            origin: (r.left, r.top),
-            device,
-            context,
-            luid: out.luid,
-            width,
-            height,
-            output: out.output,
-            dup: None,
-            texture,
-        };
-        cap.duplicate()?;
-        Ok(cap)
-    }
+struct State {
+    dup: Option<IDXGIOutputDuplication>,
+    /// Counts the images copied into the texture.
+    images: u64,
+    /// The display's mode changed, so whoever is using this starts over.
+    changed: bool,
+}
 
-    fn duplicate(&mut self) -> Result<()> {
-        self.dup = None;
+// The device is protected for use from several threads, and the duplication
+// is only touched with `state` locked.
+unsafe impl Send for Shared {}
+unsafe impl Sync for Shared {}
+
+/// Each display being captured, by name.
+static SHARED: Mutex<Vec<(String, Weak<Shared>)>> = Mutex::new(Vec::new());
+
+impl Shared {
+    fn duplicate(&self) -> Result<IDXGIOutputDuplication> {
         let dup = match self.output.cast::<IDXGIOutput5>() {
             Ok(o5) => unsafe { o5.DuplicateOutput1(&self.device, 0, &[DXGI_FORMAT_B8G8R8A8_UNORM]) },
             Err(_) => unsafe { self.output.cast::<IDXGIOutput1>()?.DuplicateOutput(&self.device) },
@@ -167,32 +161,117 @@ impl Capture {
         if desc.ModeDesc.Width != self.width || desc.ModeDesc.Height != self.height {
             bail!(ResolutionChanged);
         }
-        self.dup = Some(dup);
-        Ok(())
+        Ok(dup)
+    }
+}
+
+pub struct Capture {
+    pub device: ID3D11Device,
+    pub context: ID3D11DeviceContext,
+    pub luid: LUID,
+    pub width: u32,
+    pub height: u32,
+    pub id: String,
+    pub origin: (i32, i32),
+    /// The latest image, copied out of the duplication so its frame can be
+    /// released right away and the image re-encoded later on request.
+    pub texture: ID3D11Texture2D,
+    shared: Arc<Shared>,
+    /// How many images there had been when this last took one.
+    seen: u64,
+}
+
+impl Capture {
+    pub fn new(display: Option<&str>) -> Result<Self> {
+        crate::desktop::follow_input();
+        let out = find_output(display)?;
+        let id = device_name(&out.desc);
+        let r = out.desc.DesktopCoordinates;
+        let (width, height) = ((r.right - r.left) as u32, (r.bottom - r.top) as u32);
+        let mut all = SHARED.lock().unwrap();
+        all.retain(|(_, s)| s.strong_count() > 0);
+        let current = all.iter().find(|(d, _)| *d == id).and_then(|(_, s)| s.upgrade());
+        let (shared, seen) = match current {
+            Some(s) if (s.width, s.height) == (width, height) && !s.state.lock().unwrap().changed => {
+                // Starts with the image the others already have.
+                let seen = s.state.lock().unwrap().images.saturating_sub(1);
+                (s, seen)
+            }
+            old => {
+                let (device, context) = create_device(&out.adapter)?;
+                let texture = create_bgra(&device, width, height)?;
+                let s = Shared {
+                    device,
+                    context,
+                    luid: out.luid,
+                    width,
+                    height,
+                    origin: (r.left, r.top),
+                    output: out.output,
+                    texture,
+                    state: Mutex::new(State { dup: None, images: 0, changed: false }),
+                };
+                match s.duplicate() {
+                    Ok(dup) => s.state.lock().unwrap().dup = Some(dup),
+                    // One from before the display changed may still hold it for a moment.
+                    Err(e) if old.is_some() && !e.is::<ResolutionChanged>() => {}
+                    Err(e) => return Err(e),
+                }
+                let s = Arc::new(s);
+                all.retain(|(d, _)| *d != id);
+                all.push((id.clone(), Arc::downgrade(&s)));
+                (s, 0)
+            }
+        };
+        Ok(Self {
+            device: shared.device.clone(),
+            context: shared.context.clone(),
+            luid: shared.luid,
+            width,
+            height,
+            id,
+            origin: shared.origin,
+            texture: shared.texture.clone(),
+            shared,
+            seen,
+        })
     }
 
     /// Waits up to `timeout_ms` for a new desktop image.
     pub fn next(&mut self, timeout_ms: u32) -> Result<Frame> {
-        if self.dup.is_none() {
+        let mut state = self.shared.state.lock().unwrap();
+        if state.changed {
+            bail!(ResolutionChanged);
+        }
+        // Someone else watching took a newer image.
+        if state.images > self.seen {
+            self.seen = state.images;
+            return Ok(Frame::New);
+        }
+        if state.dup.is_none() {
             // Lost earlier (mode change, secure desktop). Keep trying quietly.
             crate::desktop::follow_input();
-            match self.duplicate() {
-                Ok(()) => {}
-                Err(e) if e.is::<ResolutionChanged>() => return Err(e),
+            match self.shared.duplicate() {
+                Ok(dup) => state.dup = Some(dup),
+                Err(e) if e.is::<ResolutionChanged>() => {
+                    state.changed = true;
+                    return Err(e);
+                }
                 Err(_) => {
+                    drop(state);
                     std::thread::sleep(std::time::Duration::from_millis(timeout_ms.max(50) as u64));
                     return Ok(Frame::Unchanged);
                 }
             }
         }
-        let dup = self.dup.as_ref().unwrap();
+        let dup = state.dup.as_ref().unwrap();
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource = None;
         match unsafe { dup.AcquireNextFrame(timeout_ms, &mut info, &mut resource) } {
             Ok(()) => {}
             Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => return Ok(Frame::Unchanged),
             Err(e) if e.code() == DXGI_ERROR_ACCESS_LOST || e.code() == DXGI_ERROR_INVALID_CALL => {
-                self.dup = None;
+                state.dup = None;
                 return Ok(Frame::Unchanged);
             }
             Err(e) => return Err(e).context("AcquireNextFrame"),
@@ -205,7 +284,12 @@ impl Capture {
             }
         }
         unsafe { _ = dup.ReleaseFrame() };
-        Ok(if changed { Frame::New } else { Frame::Unchanged })
+        if !changed {
+            return Ok(Frame::Unchanged);
+        }
+        state.images += 1;
+        self.seen = state.images;
+        Ok(Frame::New)
     }
 }
 
