@@ -14,7 +14,10 @@ mod nearby;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
+    // The window asks Windows for raw keyboard input by default, and while
+    // it's in front Windows then stops calling the hook that takes shortcuts.
+    // Nothing here uses raw input.
+    let builder = tauri::Builder::default().device_event_filter(tauri::DeviceEventFilter::Always);
     // Opening the app again shows the window that's already open.
     #[cfg(windows)]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
