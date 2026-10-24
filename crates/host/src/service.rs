@@ -105,8 +105,8 @@ fn run_service() -> Result<()> {
 struct Supervisor {
     settings: Settings,
     exe: PathBuf,
-    job: Job,
-    agent: Option<(Child, Instant)>,
+    // Keep each agent's job alive for its lifetime; jobs cannot span Windows sessions.
+    agent: Option<(Child, Job, Instant)>,
     failures: u32,
     next_attempt: Instant,
     update: UpdateStatus,
@@ -123,7 +123,7 @@ impl Supervisor {
     /// session while hosting is on, none otherwise.
     fn reconcile(&mut self) {
         let target = if self.settings.hosting { console_session() } else { None };
-        if let Some((agent, started)) = &self.agent {
+        if let Some((agent, _job, started)) = &self.agent {
             let alive = agent.is_running();
             if alive && Some(agent.session) == target {
                 if started.elapsed() > HEALTHY_RUN {
@@ -148,10 +148,15 @@ impl Supervisor {
         if Instant::now() < self.next_attempt {
             return;
         }
-        match spawn_in_session(&self.job, session, &self.exe, "agent") {
-            Ok(child) => {
+        // A job is bound to the session of its first agent. After a sign-out or
+        // user switch, reusing the old job would make AssignProcessToJobObject fail.
+        let launch = Job::new().and_then(|job| {
+            spawn_in_session(&job, session, &self.exe, "agent").map(|child| (child, job))
+        });
+        match launch {
+            Ok((child, job)) => {
                 tracing::info!("started agent {} in session {session}", child.pid);
-                self.agent = Some((child, Instant::now()));
+                self.agent = Some((child, job, Instant::now()));
             }
             Err(e) => {
                 tracing::error!("starting agent in session {session}: {e:#}");
@@ -175,11 +180,11 @@ impl Supervisor {
     }
 
     fn agent_running(&self) -> bool {
-        self.agent.as_ref().is_some_and(|(a, _)| a.is_running())
+        self.agent.as_ref().is_some_and(|(a, _, _)| a.is_running())
     }
 
     fn stop_agent(&mut self) {
-        if let Some((agent, _)) = self.agent.take() {
+        if let Some((agent, _, _)) = self.agent.take() {
             agent.kill();
         }
     }
@@ -192,7 +197,6 @@ async fn supervise(mut stop: watch::Receiver<bool>, wake: Arc<Notify>) -> Result
     let sup = Arc::new(Mutex::new(Supervisor {
         settings: Settings::load(),
         exe,
-        job: Job::new()?,
         agent: None,
         failures: 0,
         next_attempt: Instant::now(),
