@@ -170,8 +170,9 @@
         if (d.host && row?.kind === 'down' && Date.now() - row.at > 15_000) set(d.id, null)
       }
     } catch (e) {
-      // A phone can wake a previously discovered PC even if every PC is asleep.
-      if (!all && isPhoneApp) {
+      // If every PC stops answering, drop stale live host data so the Wake
+      // button appears for devices the phone already knows how to wake.
+      if (isPhoneApp) {
         const saved = rememberedWakeDevices()
         if (saved.length) {
           all = saved
