@@ -3,7 +3,7 @@ import { android, toBase64 } from './android'
 import { devices as fetchDevices, PORT, Unreachable } from './api'
 import { Problem, toProblem } from './errors'
 import type { FileSink } from './files'
-import type { ControlStatus, Device, NearbyPc } from './types'
+import type { ControlStatus, Device, NearbyPc, WakeAdapter } from './types'
 
 /** Running inside the Conductor app rather than a browser. */
 export const isApp = '__TAURI_INTERNALS__' in window
@@ -79,6 +79,10 @@ async function devicesFromKnownPcs(): Promise<Device[]> {
 interface LocalNetwork {
   allowed(): boolean
   ask(): void
+  /** Checks physical Wi-Fi/Ethernet networks, excluding the Tailscale VPN. */
+  canWake(adapters: string): boolean
+  /** Sends UDP magic packets directly on a matching network. */
+  wake(adapters: string): boolean
 }
 
 const localNetwork = (window as unknown as { ConductorNetwork?: LocalNetwork }).ConductorNetwork
@@ -95,6 +99,26 @@ function allowLocalNetwork(): Promise<boolean> {
     window.addEventListener('conductorlocalnetwork', answered)
     permission.ask()
   })
+}
+
+/** Whether this Android device can send Wake-on-LAN to the target's subnet. */
+export function canWakeLocally(adapters: WakeAdapter[]): boolean {
+  if (!isPhoneApp || !localNetwork) return false
+  try {
+    return localNetwork.canWake(JSON.stringify(adapters))
+  } catch {
+    return false
+  }
+}
+
+/** Sends Wake-on-LAN directly over Android's Wi-Fi/Ethernet interface. */
+export async function wakeLocally(adapters: WakeAdapter[]): Promise<void> {
+  if (!localNetwork || !(await allowLocalNetwork())) {
+    throw new Problem('Conductor needs local network access to wake this PC directly.')
+  }
+  if (!localNetwork.wake(JSON.stringify(adapters))) {
+    throw new Problem('This device couldn’t send wake packets on the target’s network.')
+  }
 }
 
 /** Updating the phone app from its GitHub releases. See AppUpdate.kt. */
