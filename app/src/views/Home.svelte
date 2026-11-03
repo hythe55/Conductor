@@ -16,6 +16,7 @@
     listDevices,
     nearbyPcs,
     newerPhoneApp,
+    rememberedWakeDevices,
     wakeLocally,
   } from '../lib/platform'
   import { summary } from '../lib/schedule'
@@ -78,7 +79,7 @@
    * The phone app asks one of the owner's PCs for the list. To find one, it
    * looks on the phone's Wi-Fi, and when none answers there, the owner names one.
    */
-  const noPcs = isPhoneApp && knownPcs().length === 0
+  const noPcs = isPhoneApp && knownPcs().length === 0 && rememberedWakeDevices().length === 0
   let askPc = $state(noPcs)
   let pcName = $state('')
   let finding = $state(false)
@@ -169,6 +170,15 @@
         if (d.host && row?.kind === 'down' && Date.now() - row.at > 15_000) set(d.id, null)
       }
     } catch (e) {
+      // A phone can wake a previously discovered PC even if every PC is asleep.
+      if (!all && isPhoneApp) {
+        const saved = rememberedWakeDevices()
+        if (saved.length) {
+          all = saved
+          error = null
+          return
+        }
+      }
       // Keep showing the last good list; only an empty screen needs the error.
       if (!all) error = toProblem(e, 'Couldn’t get the list of devices.')
     }
