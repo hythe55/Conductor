@@ -6,6 +6,7 @@
   import { confirmWake, deviceUrl, power, reachable, Unreachable, wake } from '../lib/api'
   import { Problem, toProblem } from '../lib/errors'
   import {
+    canWakeLocally,
     devicesFrom,
     devicesFromNearby,
     installPhoneApp,
@@ -15,11 +16,12 @@
     listDevices,
     nearbyPcs,
     newerPhoneApp,
+    wakeLocally,
   } from '../lib/platform'
   import { summary } from '../lib/schedule'
   import { share } from '../lib/share.svelte'
   import type { Device, DisplayInfo, HostInfo, NearbyPc, PowerAction, PowerSchedule, WakeAdapter } from '../lib/types'
-  import { waitUntil, wakerFor } from '../lib/wake'
+  import { waitUntil, wakersFor } from '../lib/wake'
 
   let {
     onconnect,
@@ -288,34 +290,52 @@
     set(d.id, { kind: 'down', text: asleep ? 'Asleep' : 'Turned off', asleep, at: Date.now() })
   }
 
-  /** Sends wake packets every 20 seconds until the PC answers, for up to 2 minutes. */
+  type WakeSource = { kind: 'local' } | { kind: 'relay'; device: Device }
+
+  /** Direct Android LAN first, then all reachable Windows PCs on that LAN. */
+  function wakeSources(d: Device): WakeSource[] {
+    const adapters = d.wake?.adapters ?? []
+    if (adapters.length === 0) return []
+    return [
+      ...(canWakeLocally(adapters) ? [{ kind: 'local' as const }] : []),
+      ...wakersFor(d, all ?? []).map((device) => ({ kind: 'relay' as const, device })),
+    ]
+  }
+
+  /** Try each available path, then repeat until the PC answers or two minutes pass. */
   async function wakeAndWait(
     d: Device,
     adapters: WakeAdapter[],
-    waker: Device,
+    sources: WakeSource[],
   ): Promise<'woke' | 'asleep' | 'failed'> {
     const url = deviceUrl(d)
     const deadline = Date.now() + 120_000
+    let sentAny = false
     while (Date.now() < deadline) {
-      try {
-        await wake(deviceUrl(waker), adapters)
-      } catch {
-        return 'failed'
+      let sentThisRound = false
+      for (const source of sources) {
+        if (Date.now() >= deadline) break
+        try {
+          if (source.kind === 'local') await wakeLocally(adapters)
+          else await wake(deviceUrl(source.device), adapters)
+          sentThisRound = true
+          sentAny = true
+        } catch {
+          // Try another device if this network or relay isn't available anymore.
+          continue
+        }
+        if (await waitUntil(() => reachable(url), Math.min(20_000, deadline - Date.now()), 3000)) return 'woke'
       }
-      if (await waitUntil(() => reachable(url), Math.min(20_000, deadline - Date.now()), 3000)) return 'woke'
+      if (!sentThisRound) return sentAny ? 'asleep' : 'failed'
     }
     return 'asleep'
   }
 
-  function wakerName(waker: Device) {
-    return waker.isYou ? 'This PC' : waker.name
-  }
-
   async function runWake(d: Device) {
-    const waker = wakerFor(d, all ?? [])
-    if (!waker || !d.wake) return
+    const sources = wakeSources(d)
+    if (!sources.length || !d.wake) return
     set(d.id, { kind: 'busy', text: 'Waking…', waking: true })
-    switch (await wakeAndWait(d, d.wake.adapters, waker)) {
+    switch (await wakeAndWait(d, d.wake.adapters, sources)) {
       case 'woke':
         set(d.id, null)
         load()
@@ -324,14 +344,14 @@
         note(d.id, `${d.name} didn’t wake. Try again, or wake it at the PC.`, true)
         break
       case 'failed':
-        note(d.id, `${wakerName(waker)} couldn’t send the wake signal. Try again.`, true)
+        note(d.id, 'No available device could send the wake signal. Try again.', true)
     }
   }
 
   async function runTestWake(d: Device) {
-    const waker = wakerFor(d, all ?? [])
+    const sources = wakeSources(d)
     const adapters = d.wake?.adapters
-    if (!waker || !adapters) return
+    if (!sources.length || !adapters) return
     const url = deviceUrl(d)
     set(d.id, { kind: 'busy', text: 'Going to sleep…', waking: false })
     try {
@@ -347,11 +367,11 @@
     // A PC that has only just dropped off the network may not be listening for wake packets yet.
     await new Promise((r) => setTimeout(r, 15_000))
     set(d.id, { kind: 'busy', text: 'Waking…', waking: true })
-    const result = await wakeAndWait(d, adapters, waker)
+    const result = await wakeAndWait(d, adapters, sources)
     if (result !== 'woke') {
       const why =
         result === 'failed'
-          ? `${wakerName(waker)} couldn’t send the wake signal.`
+          ? 'No available device could send the wake signal.'
           : 'Its network adapter may not be set up to wake it.'
       note(d.id, `${d.name} didn’t wake. ${why} Press a key or the power button on ${d.name} to wake it.`, true)
       return
@@ -367,13 +387,13 @@
   }
 
   function canTestWake(d: Device) {
-    return !!d.wake && !d.wake.verified && wakerFor(d, all ?? []) !== null
+    return !!d.wake && !d.wake.verified && wakeSources(d).length > 0
   }
 
-  /** The PC that would wake `d`, when waking it has been tested and it isn't on. */
+  /** Whether there is a route to the sleeping PC and waking has been tested. */
   function wakeable(d: Device, row: Row | undefined) {
-    if (!d.wake?.verified || (d.host && row?.kind !== 'down')) return null
-    return wakerFor(d, all ?? [])
+    if (!d.wake?.verified || (d.host && row?.kind !== 'down')) return false
+    return wakeSources(d).length > 0
   }
 
   async function ask(d: Device, action: Action) {
@@ -402,10 +422,10 @@
   }
 
   function question(d: Device, action: Action) {
-    const waker = wakerFor(d, all ?? [])
+    const source = wakeSources(d)[0]
     switch (action) {
       case 'sleep':
-        return d.wake?.verified && waker
+        return d.wake?.verified && source
           ? `Put ${d.name} to sleep? You can wake it from here.`
           : `Put ${d.name} to sleep? Someone will need to wake it at the PC.`
       case 'restart':
@@ -413,7 +433,7 @@
       case 'shutDown':
         return `Shut down ${d.name}? Someone will need to turn it back on at the PC.`
       case 'testWake': {
-        const by = waker?.isYou ? 'this PC' : waker?.name
+        const by = source?.kind === 'local' ? 'this device' : source?.device.isYou ? 'this PC' : source?.device.name
         return `Test waking ${d.name}? It goes to sleep, then ${by} wakes it within two minutes. If that fails, someone will need to wake it at the PC.`
       }
     }
@@ -536,7 +556,9 @@
           : d.lastSeen
             ? `Offline, last seen ${ago(d.lastSeen)}`
             : 'Offline'
-        return d.wake?.verified && !wakerFor(d, all ?? []) ? `${seen}. To wake it, turn on another PC on its network.` : seen
+        return d.wake?.verified && !wakeSources(d).length
+          ? `${seen}. To wake it, connect this device to its network or turn on another PC there.`
+          : seen
       }
     }
   }
