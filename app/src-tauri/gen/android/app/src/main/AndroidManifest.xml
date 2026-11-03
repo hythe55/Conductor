@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Inspect Wi-Fi/Ethernet network addresses for direct wake packets. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- To look for PCs on the same Wi-Fi. -->
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
     <!-- To install updates it downloads. Android still asks each time. -->
