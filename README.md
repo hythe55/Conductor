@@ -11,7 +11,7 @@ Control your Windows PCs from your other devices, over your own [Tailscale](http
 - A small picture of each PC's screen in the device list, which each PC can turn off
 - Shows who's in control on the PC's screen, or covers the screen and turns off its keyboard and mouse so nobody at the PC sees or gets in the way of what you're doing
 - Sends nothing while nobody is watching, and nothing for sound while it's quiet
-- Sleep, restart or shut down a PC from your other devices, now or on a schedule, and wake it again from another PC on its network once a test wake has worked
+- Sleep, restart or shut down a PC from your other devices, now or on a schedule, and wake it after a successful test: directly from Android on the same Wi-Fi, or through an online PC on its network
 - Updates itself from GitHub releases when nobody is using it
 - Control from the Windows app, the Android app or any browser on your tailnet, with touch controls on phones and tablets
 
@@ -28,6 +28,8 @@ Conductor is under active development. Some features listed in the [roadmap](#ro
 Download the latest installer from [Releases](https://github.com/hythe55/Conductor/releases) and run it on each PC. The installer sets up a small background service so the PC stays reachable after a restart. You can turn this off in Conductor's settings.
 
 Windows may warn that the installer is from an unknown publisher, because it isn't code-signed yet. Choose **More info**, then **Run anyway**.
+
+Once Conductor has discovered a PC and tested that it can wake, the Android app remembers its wake information. Even when all PCs are asleep, the phone can wake one directly if it is connected to the same local Wi-Fi. On other networks, Conductor needs an online PC on the sleeping machine’s LAN to relay the magic packet. Wake-on-LAN depends on the sleeping PC’s hardware and power settings; it does not work over the Tailscale VPN by itself.
 
 To control your PCs from an Android phone or tablet, download `Conductor_<version>_android-arm64.apk` from the same release and open it. Android asks you to allow installs from your browser or file manager the first time. A phone can't list the devices on your tailnet itself, so the first time the app opens, it looks for a PC with Conductor on the same Wi-Fi and asks that one. If none answers, it asks for the name of one of your PCs. PCs can stop answering in Settings. The Android app doesn't update itself yet: install a newer APK over it. It controls PCs but can't be controlled.
 

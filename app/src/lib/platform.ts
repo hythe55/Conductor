@@ -3,7 +3,7 @@ import { android, toBase64 } from './android'
 import { devices as fetchDevices, PORT, Unreachable } from './api'
 import { Problem, toProblem } from './errors'
 import type { FileSink } from './files'
-import type { ControlStatus, Device, NearbyPc } from './types'
+import type { ControlStatus, Device, NearbyPc, WakeAdapter } from './types'
 
 /** Running inside the Conductor app rather than a browser. */
 export const isApp = '__TAURI_INTERNALS__' in window
@@ -13,6 +13,61 @@ export const isDesktopApp = isApp && /Windows/.test(navigator.userAgent)
 export const isPhoneApp = isApp && !isDesktopApp
 
 const PCS_KEY = 'conductor.pcs'
+const WAKE_DEVICES_KEY = 'conductor.wakeDevices'
+
+/**
+ * The Android app has no way to ask Tailscale for devices when every PC is
+ * asleep. Keep their last known wake information, but never their online state.
+ */
+export function rememberedWakeDevices(): Device[] {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(WAKE_DEVICES_KEY) ?? '[]')
+    if (!Array.isArray(saved)) return []
+    return saved
+      .filter(
+        (d) =>
+          d &&
+          typeof d.id === 'string' &&
+          typeof d.name === 'string' &&
+          typeof d.address === 'string' &&
+          d.wake &&
+          Array.isArray(d.wake.adapters) &&
+          d.wake.adapters.length > 0,
+      )
+      .map((d) => ({
+        id: d.id,
+        name: d.name,
+        dnsName: typeof d.dnsName === 'string' ? d.dnsName : '',
+        address: d.address,
+        os: typeof d.os === 'string' ? d.os : 'windows',
+        online: false,
+        host: null,
+        wake: d.wake,
+        isSelf: false,
+        isYou: false,
+      }))
+  } catch {
+    return []
+  }
+}
+
+function rememberWakeDevices(list: Device[]) {
+  try {
+    const wakeable = list
+      .filter((d) => d.address && d.wake?.adapters.length)
+      .map((d) => ({
+        id: d.id,
+        name: d.name,
+        dnsName: d.dnsName,
+        address: d.address,
+        os: d.os,
+        wake: d.wake,
+      }))
+    localStorage.setItem(WAKE_DEVICES_KEY, JSON.stringify(wakeable))
+  } catch {
+    // The app still works while a PC is online.
+  }
+}
 
 /** PCs the phone app can ask for the device list, the one that answered last first. */
 export function knownPcs(): string[] {
@@ -36,6 +91,7 @@ function rememberPcs(pcs: string[]) {
 function rememberAnswer(pc: string, list: Device[]) {
   const others = list.filter((d) => d.host && !d.isYou).map((d) => d.address)
   rememberPcs([pc, ...others, ...knownPcs()].slice(0, 16))
+  rememberWakeDevices(list)
 }
 
 /** Asks `pc` (a name or tailnet address) for the device list. */
@@ -79,6 +135,10 @@ async function devicesFromKnownPcs(): Promise<Device[]> {
 interface LocalNetwork {
   allowed(): boolean
   ask(): void
+  /** Checks physical Wi-Fi/Ethernet networks, excluding the Tailscale VPN. */
+  canWake(adapters: string): boolean
+  /** Sends UDP magic packets directly on a matching network. */
+  wake(adapters: string): boolean
 }
 
 const localNetwork = (window as unknown as { ConductorNetwork?: LocalNetwork }).ConductorNetwork
@@ -95,6 +155,26 @@ function allowLocalNetwork(): Promise<boolean> {
     window.addEventListener('conductorlocalnetwork', answered)
     permission.ask()
   })
+}
+
+/** Whether this Android device can send Wake-on-LAN to the target's subnet. */
+export function canWakeLocally(adapters: WakeAdapter[]): boolean {
+  if (!isPhoneApp || !localNetwork) return false
+  try {
+    return localNetwork.canWake(JSON.stringify(adapters))
+  } catch {
+    return false
+  }
+}
+
+/** Sends Wake-on-LAN directly over Android's Wi-Fi/Ethernet interface. */
+export async function wakeLocally(adapters: WakeAdapter[]): Promise<void> {
+  if (!localNetwork || !(await allowLocalNetwork())) {
+    throw new Problem('Conductor needs local network access to wake this PC directly.')
+  }
+  if (!localNetwork.wake(JSON.stringify(adapters))) {
+    throw new Problem('This device couldn’t send wake packets on the target’s network.')
+  }
 }
 
 /** Updating the phone app from its GitHub releases. See AppUpdate.kt. */

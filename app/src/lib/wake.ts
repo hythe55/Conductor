@@ -11,16 +11,20 @@ function sameNetwork(a: WakeAdapter, b: WakeAdapter): boolean {
 }
 
 /**
- * A PC that's on and on the same network as `target`, which can send the
- * packets that wake it. The device this runs on comes first, then the PC
- * serving this page.
+ * Online PCs that share a local network with the target. Prefer the PC this
+ * runs on, then the PC serving the page, then other PCs as fallbacks.
  */
-export function wakerFor(target: Device, all: Device[]): Device | null {
+export function wakersFor(target: Device, all: Device[]): Device[] {
   const theirs = target.wake?.adapters ?? []
-  if (theirs.length === 0) return null
+  if (theirs.length === 0) return []
   const rank = (d: Device) => (d.isYou ? 0 : d.isSelf ? 1 : 2)
-  const candidates = all.filter((d) => d.id !== target.id && d.host?.wake).sort((a, b) => rank(a) - rank(b))
-  return candidates.find((d) => d.host!.wake!.adapters.some((a) => theirs.some((t) => sameNetwork(a, t)))) ?? null
+  return all
+    .filter(
+      (d) =>
+        d.id !== target.id &&
+        d.host?.wake?.adapters.some((a) => theirs.some((t) => sameNetwork(a, t))),
+    )
+    .sort((a, b) => rank(a) - rank(b))
 }
 
 /** Checks `test` every `every` ms until it's true or `within` ms pass. */

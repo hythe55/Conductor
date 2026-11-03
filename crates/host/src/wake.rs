@@ -106,6 +106,8 @@ pub async fn send(targets: &[WakeAdapter]) -> Result<()> {
         bail!("This PC isn't on the same network as the PC to wake.");
     }
     // Repeated in case one is lost: they're small and only sent on request.
+    // Tell the caller if every send failed, so it can try a different relay.
+    let mut sent = false;
     for round in 0..3 {
         if round > 0 {
             tokio::time::sleep(Duration::from_millis(300)).await;
@@ -113,12 +115,16 @@ pub async fn send(targets: &[WakeAdapter]) -> Result<()> {
         for (socket, packet, destinations) in &sends {
             for address in destinations {
                 for port in [9, 7] {
-                    if let Err(e) = socket.send_to(packet, (*address, port)).await {
-                        tracing::debug!("wake packet to {address}:{port}: {e}");
+                    match socket.send_to(packet, (*address, port)).await {
+                        Ok(_) => sent = true,
+                        Err(e) => tracing::debug!("wake packet to {address}:{port}: {e}"),
                     }
                 }
             }
         }
+    }
+    if !sent {
+        bail!("Could not send wake packets on this network.");
     }
     Ok(())
 }
