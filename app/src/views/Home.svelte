@@ -414,10 +414,10 @@
     return !!d.wake?.adapters.length && !d.wake.verified
   }
 
-  /** Wake is visible for any offline PC with known adapters; the action
-   * reports missing network paths instead of silently disappearing. */
+  /** Offline PCs always show Wake. If details or a route are unavailable,
+   * the action explains why instead of vanishing from the UI. */
   function wakeable(d: Device, row: Row | undefined) {
-    return !!d.wake?.adapters.length && (!d.host || row?.kind === 'down')
+    return !d.host || row?.kind === 'down'
   }
 
   async function ask(d: Device, action: Action) {
