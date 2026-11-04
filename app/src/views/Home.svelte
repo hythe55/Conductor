@@ -343,8 +343,15 @@
   }
 
   async function runWake(d: Device) {
+    if (!d.wake?.adapters.length) {
+      note(d.id, `Conductor hasn't saved the network adapter for ${d.name} yet. Connect to it while it's on first.`, true)
+      return
+    }
     const sources = wakeSources(d)
-    if (!sources.length || !d.wake) return
+    if (!sources.length) {
+      note(d.id, `No wake path is available. Connect this device to ${d.name}'s Wi-Fi or turn on a Conductor PC on its network.`, true)
+      return
+    }
     set(d.id, { kind: 'busy', text: 'Waking…', waking: true })
     switch (await wakeAndWait(d, d.wake.adapters, sources)) {
       case 'woke':
@@ -362,7 +369,11 @@
   async function runTestWake(d: Device) {
     const sources = wakeSources(d)
     const adapters = d.wake?.adapters
-    if (!sources.length || !adapters) return
+    if (!adapters?.length) return
+    if (!sources.length) {
+      note(d.id, `Can't test waking ${d.name} without a local network connection or another online Conductor PC on its LAN.`, true)
+      return
+    }
     const url = deviceUrl(d)
     set(d.id, { kind: 'busy', text: 'Going to sleep…', waking: false })
     try {
@@ -398,13 +409,15 @@
   }
 
   function canTestWake(d: Device) {
-    return !!d.wake && !d.wake.verified && wakeSources(d).length > 0
+    // Show the setup action even if Android cannot detect the LAN yet.
+    // Testing without a route reports the problem before sleeping the PC.
+    return !!d.wake?.adapters.length && !d.wake.verified
   }
 
-  /** Whether there is a route to the sleeping PC and waking has been tested. */
+  /** Offline PCs always show Wake. If details or a route are unavailable,
+   * the action explains why instead of vanishing from the UI. */
   function wakeable(d: Device, row: Row | undefined) {
-    if (!d.wake?.verified || (d.host && row?.kind !== 'down')) return false
-    return wakeSources(d).length > 0
+    return !d.host || row?.kind === 'down'
   }
 
   async function ask(d: Device, action: Action) {
@@ -567,7 +580,7 @@
           : d.lastSeen
             ? `Offline, last seen ${ago(d.lastSeen)}`
             : 'Offline'
-        return d.wake?.verified && !wakeSources(d).length
+        return d.wake?.adapters.length && !wakeSources(d).length
           ? `${seen}. To wake it, connect this device to its network or turn on another PC there.`
           : seen
       }
@@ -735,7 +748,7 @@
         {@const osd = row?.kind === 'busy' || row?.kind === 'confirm'}
         {@const map = on && !preview && !osd && d.host ? arrangement(d.host.displays) : null}
         {@const connectable = on && !waker && !osd && row?.kind !== 'schedule'}
-        {@const powered = connectable && !!d.host?.wake}
+        {@const powered = connectable && !!d.host}
         <li class={rowClass(d, row)} data-row={d.id} tabindex="-1">
           <!-- A larger place to click. The keyboard and screen readers use the Connect button below. -->
           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->

@@ -59,7 +59,7 @@ class LocalNetwork(private val activity: Activity) {
             val packet = ByteArray(102) { i ->
               if (i < 6) 0xff.toByte() else route.target.mac[(i - 6) % 6]
             }
-            val destinations = listOf(-1, route.target.address or route.target.mask.inv(), route.target.address)
+            val destinations = listOf(-1, route.localBroadcast, route.target.address or route.target.mask.inv(), route.target.address).distinct()
             for (round in 0 until 3) {
               if (round > 0) Thread.sleep(300)
               for (address in destinations) {
@@ -87,7 +87,7 @@ class LocalNetwork(private val activity: Activity) {
   fun onResult(requestCode: Int): Boolean = requestCode == REQUEST
 
   private data class Target(val mac: ByteArray, val address: Int, val mask: Int, val prefix: Int)
-  private data class Route(val network: Network, val target: Target)
+  private data class Route(val network: Network, val target: Target, val localBroadcast: Int)
 
   private fun routes(json: String): List<Route> {
     val items = JSONArray(json)
@@ -115,10 +115,13 @@ class LocalNetwork(private val activity: Activity) {
         val address = link.address as? Inet4Address ?: continue
         if (address.isLoopbackAddress || address.isLinkLocalAddress) continue
         val local = ipInt(address.address)
+        if (link.prefixLength !in 1..32) continue
+        val localMask = -1 shl (32 - link.prefixLength)
         for (target in targets) {
-          // Match both the subnet and prefix, just as the Windows host does.
-          if (link.prefixLength == target.prefix && (local and target.mask) == (target.address and target.mask)) {
-            result.add(Route(network, target))
+          // The phone and PC can advertise different prefix lengths while
+          // still sharing the same physical LAN. Use Android's actual route.
+          if ((local and localMask) == (target.address and localMask)) {
+            result.add(Route(network, target, local or localMask.inv()))
           }
         }
       }
