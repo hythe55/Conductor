@@ -137,8 +137,8 @@ interface LocalNetwork {
   ask(): void
   /** Checks physical Wi-Fi/Ethernet networks, excluding the Tailscale VPN. */
   canWake(adapters: string): boolean
-  /** Sends UDP magic packets directly on a matching network. */
-  wake(adapters: string): boolean
+  /** Empty string on success; otherwise the Android socket or permission failure. */
+  wake(adapters: string): string
 }
 
 const localNetwork = (window as unknown as { ConductorNetwork?: LocalNetwork }).ConductorNetwork
@@ -172,8 +172,9 @@ export async function wakeLocally(adapters: WakeAdapter[]): Promise<void> {
   if (!localNetwork || !(await allowLocalNetwork())) {
     throw new Problem('Conductor needs local network access to wake this PC directly.')
   }
-  if (!localNetwork.wake(JSON.stringify(adapters))) {
-    throw new Problem('This device couldn’t send wake packets on the target’s network.')
+  const error = localNetwork.wake(JSON.stringify(adapters))
+  if (error) {
+    throw new Problem(error)
   }
 }
 

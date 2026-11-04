@@ -322,6 +322,7 @@
     const url = deviceUrl(d)
     const deadline = Date.now() + 120_000
     let sentAny = false
+    let lastError: unknown = null
     while (Date.now() < deadline) {
       let sentThisRound = false
       for (const source of sources) {
@@ -331,13 +332,17 @@
           else await wake(deviceUrl(source.device), adapters)
           sentThisRound = true
           sentAny = true
-        } catch {
-          // Try another device if this network or relay isn't available anymore.
+        } catch (e) {
+          // Try another device, but preserve the reason if every path fails.
+          lastError = e
           continue
         }
         if (await waitUntil(() => reachable(url), Math.min(20_000, deadline - Date.now()), 3000)) return 'woke'
       }
-      if (!sentThisRound) return sentAny ? 'asleep' : 'failed'
+      if (!sentThisRound) {
+        if (!sentAny && lastError) throw lastError
+        return sentAny ? 'asleep' : 'failed'
+      }
     }
     return 'asleep'
   }
@@ -353,16 +358,20 @@
       return
     }
     set(d.id, { kind: 'busy', text: 'Waking…', waking: true })
-    switch (await wakeAndWait(d, d.wake.adapters, sources)) {
-      case 'woke':
-        set(d.id, null)
-        load()
-        break
-      case 'asleep':
-        note(d.id, `${d.name} didn’t wake. Try again, or wake it at the PC.`, true)
-        break
-      case 'failed':
-        note(d.id, 'No available device could send the wake signal. Try again.', true)
+    try {
+      switch (await wakeAndWait(d, d.wake.adapters, sources)) {
+        case 'woke':
+          set(d.id, null)
+          load()
+          break
+        case 'asleep':
+          note(d.id, `${d.name} didn’t wake. Try again, or wake it at the PC.`, true)
+          break
+        case 'failed':
+          note(d.id, 'No available device could send the wake signal. Try again.', true)
+      }
+    } catch (e) {
+      note(d.id, toProblem(e, 'Couldn’t send Wake-on-LAN packets.').message, true)
     }
   }
 
@@ -389,7 +398,13 @@
     // A PC that has only just dropped off the network may not be listening for wake packets yet.
     await new Promise((r) => setTimeout(r, 15_000))
     set(d.id, { kind: 'busy', text: 'Waking…', waking: true })
-    const result = await wakeAndWait(d, adapters, sources)
+    let result: 'woke' | 'asleep' | 'failed'
+    try {
+      result = await wakeAndWait(d, adapters, sources)
+    } catch (e) {
+      note(d.id, `${d.name} didn’t wake. ${toProblem(e, 'Couldn’t send Wake-on-LAN packets.').message} Wake it at the PC.`, true)
+      return
+    }
     if (result !== 'woke') {
       const why =
         result === 'failed'

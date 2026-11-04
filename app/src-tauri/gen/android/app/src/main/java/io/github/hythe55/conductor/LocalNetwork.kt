@@ -46,11 +46,17 @@ class LocalNetwork(private val activity: Activity) {
    * Returns false if no matching network exists or all sends fail.
    */
   @JavascriptInterface
-  fun wake(adapters: String): Boolean {
-    if (!allowed()) return false
-    return runCatching {
+  fun wake(adapters: String): String {
+    if (!allowed()) return "Allow Nearby devices access for Conductor in Android settings to send wake packets."
+    return try {
+      val matches = routes(adapters)
+      if (matches.isEmpty()) {
+        return "Android found no Wi-Fi/Ethernet interface on the sleeping PC's subnet."
+      }
+
       var sent = false
-      for (route in routes(adapters)) {
+      var firstFailure: String? = null
+      for (route in matches) {
         try {
           DatagramSocket().use { socket ->
             // Route the broadcast over Wi-Fi/Ethernet rather than the VPN.
@@ -68,19 +74,22 @@ class LocalNetwork(private val activity: Activity) {
                   try {
                     socket.send(DatagramPacket(packet, packet.size, destination, port))
                     sent = true
-                  } catch (_: Exception) {
-                    // Try the other broadcast address and port.
+                  } catch (e: Exception) {
+                    if (firstFailure == null) firstFailure = "${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
                   }
                 }
               }
             }
           }
-        } catch (_: Exception) {
-          // One network may have gone away; try the other matching routes.
+        } catch (e: Exception) {
+          if (firstFailure == null) firstFailure = "${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
         }
       }
-      sent
-    }.getOrDefault(false)
+
+      if (sent) "" else "Android could not send wake packets: ${firstFailure ?: "no packets were sent"}"
+    } catch (e: Exception) {
+      "Android could not prepare Wake-on-LAN: ${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
+    }
   }
 
   /** True when [requestCode] was this permission's, so the page should be told. */
