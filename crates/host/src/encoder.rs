@@ -74,6 +74,13 @@ fn pack(hi: u32, lo: u32) -> u64 {
     ((hi as u64) << 32) | lo as u64
 }
 
+/// H.264 CODECAPI_AVEncCommonBufferSize uses bytes. Retain a small minimum
+/// for low-bitrate streams and use u64 to avoid intermediate overflow.
+fn encoder_buffer_bytes(bitrate: u32, fps: u32) -> u32 {
+    ((bitrate as u64 * 3) / (fps.max(1) as u64 * 8))
+        .clamp(16 * 1024, u32::MAX as u64) as u32
+}
+
 fn friendly_name(activate: &IMFActivate) -> String {
     unsafe {
         let Ok(len) = activate.GetStringLength(&MFT_FRIENDLY_NAME_Attribute) else {
@@ -204,11 +211,9 @@ impl Encoder {
                 _ = c.SetValue(&CODECAPI_AVLowLatencyMode, &variant_bool(true));
                 _ = c.SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &variant_u32(0));
                 _ = c.SetValue(&CODECAPI_AVEncMPVGOPSize, &variant_u32(fps * 60));
-                // A buffer of one frame's worth of bits keeps every frame near its share of
-                // the bitrate. Keyframes otherwise come out several times bigger (100 KB and
-                // more at 8 Mbps) and hold up the frames behind them on a busy connection;
-                // capped, they start a little soft and the next frames sharpen them.
-                _ = c.SetValue(&CODECAPI_AVEncCommonBufferSize, &variant_u32(bitrate / fps));
+                // H.264 HRD buffer size is in *bytes*, unlike the bitrate in bits/s.
+                // Allow ~3 frames: enough for keyframes without large network bursts.
+                _ = c.SetValue(&CODECAPI_AVEncCommonBufferSize, &variant_u32(encoder_buffer_bytes(bitrate, fps)));
             }
 
             let out = MFCreateMediaType()?;
@@ -425,5 +430,12 @@ mod tests {
     fn detects_sps() {
         assert!(super::has_sps(&[0, 0, 0, 1, 0x67, 0x64]));
         assert!(!super::has_sps(&[0, 0, 0, 1, 0x65, 0x88]));
+    }
+
+    #[test]
+    fn rate_control_buffer_is_bytes_not_bits() {
+        assert_eq!(super::encoder_buffer_bytes(8_000_000, 60), 50_000);
+        assert_eq!(super::encoder_buffer_bytes(8_000_000, 30), 100_000);
+        assert_eq!(super::encoder_buffer_bytes(500_000, 60), 16_384);
     }
 }
