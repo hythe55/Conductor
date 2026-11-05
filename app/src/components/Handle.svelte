@@ -4,6 +4,7 @@
   import ProblemText from './ProblemText.svelte'
   import type { Problem } from '../lib/errors'
   import type { DisplayInfo, ShownWindow, WindowInfo } from '../lib/types'
+  import type { StreamMode } from '../lib/api'
 
   /** Status shown on the handle; a problem is explained at the top of the menu. */
   interface Notice {
@@ -39,8 +40,9 @@
     /** The remote PC's name. */
     pc: string
     hideScreen: boolean
-    /** What a slow connection keeps: text sharp, or motion smooth. Null where the PC can't choose. */
-    sharp: boolean | null
+    /** Which streaming tradeoff to use. Null on hosts without quality controls. */
+    mode: StreamMode | null
+    balanced: boolean
     onselectdisplay: (id: string) => void
     /** Asks for the windows open on the remote PC. Only given where it can show one. */
     onlistwindows?: () => void
@@ -49,7 +51,7 @@
     ontogglestats: () => void
     ontogglesound: () => void
     ontogglehidescreen: () => void
-    onsetsharp: (sharp: boolean) => void
+    onsetmode: (mode: StreamMode) => void
     /** Opens the on-screen keyboard. Only given where there's no real one. */
     onkeyboard?: () => void
     onsendfiles: () => void
@@ -77,7 +79,8 @@
     sound,
     pc,
     hideScreen,
-    sharp,
+    mode,
+    balanced,
     onselectdisplay,
     onlistwindows,
     onselectwindow,
@@ -85,7 +88,7 @@
     ontogglestats,
     ontogglesound,
     ontogglehidescreen,
-    onsetsharp,
+    onsetmode,
     onkeyboard,
     onsendfiles,
     onstopsending,
@@ -404,18 +407,18 @@
           </div>
         {/if}
 
-        {#if sharp !== null}
-          <div class="group" role="group" aria-label="On a slow connection">
-            {#each [false, true] as option (option)}
+        {#if mode !== null}
+          <div class="group" role="group" aria-label="Streaming quality">
+            {#each (balanced ? ['balanced', 'smooth', 'sharp'] : ['smooth', 'sharp']) as option (option)}
               <button
                 class="item"
                 role="menuitemradio"
-                aria-checked={sharp === option}
+                aria-checked={mode === option}
                 tabindex="-1"
-                onclick={() => run(() => onsetsharp(option))}
+                onclick={() => run(() => onsetmode(option as StreamMode))}
               >
-                <span class="check">{#if sharp === option}<Icon name="check" />{/if}</span>
-                <span class="text">{option ? 'Keep text sharp' : 'Keep motion smooth'}</span>
+                <span class="check">{#if mode === option}<Icon name="check" />{/if}</span>
+                <span class="text">{option === 'balanced' ? 'Balanced · native 30 FPS first' : option === 'sharp' ? 'Keep text sharp' : 'Keep motion smooth'}</span>
               </button>
             {/each}
           </div>

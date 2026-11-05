@@ -123,6 +123,9 @@ pub struct HostInfo {
     /// Takes [`SessionRequest::sharp`] and [`ClientMsg::SetSharp`]. Hosts from 0.1.12.
     #[serde(default)]
     pub sharp: bool,
+    /// Takes the three-way quality mode preference. Older hosts support only `sharp`.
+    #[serde(default)]
+    pub balanced: bool,
     /// Someone at this PC has to allow each device that connects, so a new
     /// session can take [`ASK_WAIT_SECS`] and more to start. Refused with 409
     /// Conflict and a sentence saying why. Hosts from 0.1.12.
@@ -275,6 +278,15 @@ pub struct Device {
     pub is_you: bool,
 }
 
+/// Which constraint to preserve when the network cannot carry native 60 FPS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum QualityMode {
+    Smooth,
+    Balanced,
+    Sharp,
+}
+
 /// Body of `POST /api/session`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -293,6 +305,9 @@ pub struct SessionRequest {
     /// ones at the full frame rate.
     #[serde(default)]
     pub sharp: bool,
+    /// New clients use this; when omitted, preserve legacy sharp/smooth behavior.
+    #[serde(default)]
+    pub mode: Option<QualityMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -399,6 +414,9 @@ pub enum ClientMsg {
     /// Changes [`SessionRequest::sharp`]. Only sent to hosts with [`HostInfo::sharp`].
     #[serde(rename_all = "camelCase")]
     SetSharp { sharp: bool },
+    /// Select Smooth, Balanced, or Sharp without reconnecting. New hosts only.
+    #[serde(rename_all = "camelCase")]
+    SetMode { mode: QualityMode },
 }
 
 /// Host to client, over the `control` data channel.

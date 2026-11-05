@@ -3,7 +3,8 @@
   import { Problem } from '../lib/errors'
   import { attachDesktopInput } from '../lib/input'
   import { RemoteSession, type SessionState, type Stats } from '../lib/session'
-  import { readClipboard, shortcutStatus, stillHoldsImage, takeShortcuts, writeClipboard } from '../lib/platform'
+  import type { StreamMode } from '../lib/api'
+  import { isPhoneApp, readClipboard, shortcutStatus, stillHoldsImage, takeShortcuts, writeClipboard } from '../lib/platform'
   import { share } from '../lib/share.svelte'
   import { attachTouchInput } from '../lib/touch'
   import { Transfers } from '../lib/transfers.svelte'
@@ -27,6 +28,7 @@
     displays: info.displays,
     display: info.displays.find((d) => d.primary)?.id ?? info.displays[0]?.id ?? '',
     sharp: !!info.sharp,
+    balanced: !!info.balanced,
     asks: !!info.ask,
   }))
 
@@ -58,9 +60,10 @@
   // Covering the remote PC's screen is remembered for each PC.
   const HIDE_KEY = `conductor.hideScreen.${start.name}`
   let hideScreen = $state(savedHideScreen())
-  // And what gives way on a slow connection: motion or detail.
+  // Balanced favors native 30 FPS. Existing per-PC sharp preferences migrate.
   const SHARP_KEY = `conductor.sharp.${start.name}`
-  let sharp = $state(savedSharp())
+  const MODE_KEY = `conductor.mode.${start.name}`
+  let mode = $state<StreamMode>(savedMode())
   let route = $state<Route | null>(null)
   // Said on the handle once the connection has been relayed for a while. Tailscale
   // often starts relayed and finds a direct path within seconds.
@@ -187,9 +190,12 @@
     start.url,
     {
       display: start.display || undefined,
-      maxWidth: longSide,
-      maxHeight: longSide,
-      sharp: start.sharp ? untrack(() => sharp) : undefined,
+      // Desktop viewers can request the source's native resolution. Mobile
+      // stays capped to its display so decoding unnecessary 4K is avoided.
+      maxWidth: isPhoneApp ? longSide : 7680,
+      maxHeight: isPhoneApp ? longSide : 4320,
+      mode: start.balanced ? untrack(() => mode) : undefined,
+      sharp: start.sharp && !start.balanced ? untrack(() => mode === 'sharp') : undefined,
     },
     {
       onState(s, e) {
@@ -342,7 +348,7 @@
       return
     }
     const timer = setInterval(async () => {
-      stats = await session.stats()
+      stats = await session.stats(video)
       shortcuts = await shortcutStatus()
     }, 1000)
     return () => clearInterval(timer)
@@ -368,25 +374,35 @@
     else soundLater?.abort()
   }
 
-  function savedSharp() {
+  function savedMode(): StreamMode {
     try {
-      return localStorage.getItem(SHARP_KEY) === 'on'
+      const stored = localStorage.getItem(MODE_KEY)
+      if (stored === 'smooth' || stored === 'balanced' || stored === 'sharp') {
+        return start.balanced ? stored : stored === 'balanced' ? 'smooth' : stored
+      }
+      if (localStorage.getItem(SHARP_KEY) === 'on') return 'sharp'
     } catch {
-      return false
+      // Use the host's available default.
     }
+    return start.balanced ? 'balanced' : 'smooth'
   }
 
-  function setSharp(value: boolean) {
-    if (value === sharp) return
-    sharp = value
+  function setMode(value: StreamMode) {
+    if (value === mode) return
+    mode = value
     try {
-      if (sharp) localStorage.setItem(SHARP_KEY, 'on')
-      else localStorage.removeItem(SHARP_KEY)
+      localStorage.setItem(MODE_KEY, value)
     } catch {
       // Not remembered; it still changed.
     }
-    session.options.sharp = sharp
-    session.send({ t: 'setSharp', sharp })
+    if (start.balanced) {
+      session.options.mode = value
+      session.send({ t: 'setMode', mode: value })
+    } else {
+      const sharp = value === 'sharp'
+      session.options.sharp = sharp
+      session.send({ t: 'setSharp', sharp })
+    }
   }
 
   function savedHideScreen() {
@@ -636,11 +652,14 @@
 
   {#if showStats && stats}
     <div class="stats" aria-label="Connection details">
-      <span>{stats.width}×{stats.height} at {stats.fps} fps</span>
+      <span>{stats.width}×{stats.height} at {stats.fps} decoded fps{stats.renderedFps != null ? ` · ${Math.round(stats.renderedFps)} displayed fps` : ''}</span>
       <span>{(stats.bitrateKbps / 1000).toFixed(1)} Mbps</span>
       {#if stats.rttMs != null}<span>{stats.rttMs} ms round trip</span>{/if}
       {#if route}<span>{routeText(route)}</span>{/if}
       {#if stats.decoder}<span>Decoder: {stats.decoder}</span>{/if}
+      {#if stats.decodeMs != null}<span>Decode: {stats.decodeMs.toFixed(1)} ms/frame</span>{/if}
+      {#if stats.jitterMs != null}<span>Jitter buffer: {stats.jitterMs.toFixed(1)} ms/frame</span>{/if}
+      {#if stats.droppedDelta || stats.lostDelta || stats.freezesDelta}<span>Last second: {stats.droppedDelta} dropped frames, {stats.lostDelta} packets lost, {stats.freezesDelta} freezes</span>{/if}
       {#if stats.dropped || stats.lost}<span>{stats.dropped} frames dropped, {stats.lost} packets lost</span>{/if}
       {#if shortcuts}
         {#if shortcuts.taking}
@@ -679,7 +698,8 @@
       {sound}
       pc={info.name}
       {hideScreen}
-      sharp={start.sharp ? sharp : null}
+      mode={start.sharp ? mode : null}
+      balanced={start.balanced}
       onselectdisplay={selectDisplay}
       onlistwindows={canShowWindows ? listWindows : undefined}
       onselectwindow={selectWindow}
@@ -687,7 +707,7 @@
       ontogglestats={() => (showStats = !showStats)}
       ontogglesound={toggleSound}
       ontogglehidescreen={toggleHideScreen}
-      onsetsharp={setSharp}
+      onsetmode={setMode}
       onkeyboard={coarse ? () => keyboard.show() : undefined}
       onsendfiles={() => picker.click()}
       onstopsending={() => transfers.stopSending()}

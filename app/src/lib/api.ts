@@ -53,6 +53,8 @@ export function deviceUrl(d: Device): HostUrl {
   return `http://${d.address}:${PORT}`
 }
 
+export type StreamMode = 'smooth' | 'balanced' | 'sharp'
+
 export interface SessionOptions {
   display?: string
   maxWidth?: number
@@ -62,6 +64,8 @@ export interface SessionOptions {
    * rather than smaller ones at the full frame rate. Only for hosts with `sharp`.
    */
   sharp?: boolean
+  /** Three-way mode supported by newer hosts; absent on legacy hosts. */
+  mode?: StreamMode
 }
 
 /** With `asks`, someone at the PC may first have to allow it. */

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use conductor_proto::{COPIED_CHANNEL, ClientMsg, FILE_CHANNEL, FileReply, HostMsg, Route, ShownWindow};
+use conductor_proto::{COPIED_CHANNEL, ClientMsg, FILE_CHANNEL, FileReply, HostMsg, QualityMode, Route, ShownWindow};
 use str0m::bwe::{Bitrate, BweKind};
 use str0m::change::SdpOffer;
 use str0m::channel::ChannelId;
@@ -70,6 +70,7 @@ pub struct Params {
     pub display: Option<String>,
     pub max_size: (u32, u32),
     pub sharp: bool,
+    pub mode: Option<QualityMode>,
 }
 
 /// Accepts an SDP offer, spawns the session task and returns the SDP answer.
@@ -204,7 +205,7 @@ async fn run(rtc: Rtc, socket: UdpSocket, params: Params, mut route_rx: mpsc::Re
         max_size: params.max_size,
         bitrate: START_BITRATE,
         carried: START_BITRATE,
-        quality: Quality::new(params.sharp, Instant::now()),
+        quality: Quality::new(params.mode.unwrap_or(if params.sharp { QualityMode::Sharp } else { QualityMode::Smooth }), Instant::now()),
         full_pixels: 0,
         connected: false,
         paused: false,
@@ -541,7 +542,13 @@ impl Session {
                 }
             }
             ClientMsg::SetSharp { sharp } => {
-                if self.quality.set_sharp(sharp, self.carried, self.full_pixels) {
+                // Keep the legacy control message working with older clients.
+                if self.quality.set_mode(if sharp { QualityMode::Sharp } else { QualityMode::Smooth }, self.carried, self.full_pixels) {
+                    self.requality();
+                }
+            }
+            ClientMsg::SetMode { mode } => {
+                if self.quality.set_mode(mode, self.carried, self.full_pixels) {
                     self.requality();
                 }
             }

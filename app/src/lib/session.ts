@@ -13,6 +13,13 @@ export interface Stats {
   decoder: string
   dropped: number
   lost: number
+  /** New drops/losses since the previous sample, not lifetime totals. */
+  droppedDelta: number
+  lostDelta: number
+  freezesDelta: number
+  jitterMs: number | null
+  decodeMs: number | null
+  renderedFps: number | null
 }
 
 export interface SessionHandlers {
@@ -51,7 +58,7 @@ export class RemoteSession {
   private attempt = 0
   private closed = false
   private disconnectTimer: number | undefined
-  private lastStats: { at: number; bytes: number; frames: number } | null = null
+  private lastStats: { at: number; bytes: number; frames: number; dropped: number; lost: number; freezes: number; decodedTime: number; emitted: number; jitterDelay: number; rendered: number | null } | null = null
   options: SessionOptions
 
   constructor(
@@ -89,9 +96,14 @@ export class RemoteSession {
 
     pc.ontrack = (e) => {
       const r = e.receiver as RTCRtpReceiver & { jitterBufferTarget?: number; playoutDelayHint?: number }
-      // Lowest latency: render frames as soon as they decode.
-      if ('jitterBufferTarget' in r) r.jitterBufferTarget = 0
-      if ('playoutDelayHint' in r) r.playoutDelayHint = 0
+      // Give Wi-Fi jitter one frame of slack rather than requiring every
+      // packet to arrive immediately. Browsers may ignore these hints.
+      try {
+        if ('jitterBufferTarget' in r) r.jitterBufferTarget = 0.03
+        if ('playoutDelayHint' in r) r.playoutDelayHint = 0.03
+      } catch {
+        // Not all WebViews permit a writable playout target.
+      }
       const stream = e.streams[0] ?? new MediaStream([e.track])
       if (e.track.kind === 'video') this.handlers.onStream(stream)
       else if (e.track.kind === 'audio') this.handlers.onAudio?.(stream)
@@ -159,7 +171,7 @@ export class RemoteSession {
     if (this.channel?.readyState === 'open') this.channel.send(JSON.stringify(msg))
   }
 
-  async stats(): Promise<Stats | null> {
+  async stats(video?: HTMLVideoElement): Promise<Stats | null> {
     const pc = this.pc
     if (!pc) return null
     const report = await pc.getStats()
@@ -175,12 +187,38 @@ export class RemoteSession {
     const now = performance.now()
     let bitrate = 0
     let fps = inbound.framesPerSecond ?? 0
+    let droppedDelta = 0
+    let lostDelta = 0
+    let freezesDelta = 0
+    let jitterMs: number | null = null
+    let decodeMs: number | null = null
+    let renderedFps: number | null = null
+    const rendered = video?.getVideoPlaybackQuality?.().totalVideoFrames ?? null
+    const emitted = inbound.jitterBufferEmittedCount ?? 0
+    const decodedTime = inbound.totalDecodeTime ?? 0
+    const jitterDelay = inbound.jitterBufferDelay ?? 0
     if (this.lastStats) {
       const dt = (now - this.lastStats.at) / 1000
-      bitrate = ((inbound.bytesReceived - this.lastStats.bytes) * 8) / 1000 / dt
-      if (!inbound.framesPerSecond) fps = (inbound.framesDecoded - this.lastStats.frames) / dt
+      if (dt > 0) {
+        bitrate = ((inbound.bytesReceived - this.lastStats.bytes) * 8) / 1000 / dt
+        if (!inbound.framesPerSecond) fps = (inbound.framesDecoded - this.lastStats.frames) / dt
+        const frames = inbound.framesDecoded - this.lastStats.frames
+        if (frames > 0 && decodedTime >= this.lastStats.decodedTime) {
+          decodeMs = (decodedTime - this.lastStats.decodedTime) * 1000 / frames
+        }
+        const emittedDelta = emitted - this.lastStats.emitted
+        if (emittedDelta > 0 && jitterDelay >= this.lastStats.jitterDelay) {
+          jitterMs = (jitterDelay - this.lastStats.jitterDelay) * 1000 / emittedDelta
+        }
+        if (rendered !== null && this.lastStats.rendered !== null && rendered >= this.lastStats.rendered) {
+          renderedFps = (rendered - this.lastStats.rendered) / dt
+        }
+      }
+      droppedDelta = Math.max(0, (inbound.framesDropped ?? 0) - this.lastStats.dropped)
+      lostDelta = Math.max(0, (inbound.packetsLost ?? 0) - this.lastStats.lost)
+      freezesDelta = Math.max(0, (inbound.freezeCount ?? 0) - this.lastStats.freezes)
     }
-    this.lastStats = { at: now, bytes: inbound.bytesReceived, frames: inbound.framesDecoded }
+    this.lastStats = { at: now, bytes: inbound.bytesReceived, frames: inbound.framesDecoded, dropped: inbound.framesDropped ?? 0, lost: inbound.packetsLost ?? 0, freezes: inbound.freezeCount ?? 0, decodedTime, emitted, jitterDelay, rendered }
     return {
       fps: Math.round(fps),
       bitrateKbps: Math.round(bitrate),
@@ -190,6 +228,12 @@ export class RemoteSession {
       decoder: inbound.decoderImplementation ?? '',
       dropped: inbound.framesDropped ?? 0,
       lost: inbound.packetsLost ?? 0,
+      droppedDelta,
+      lostDelta,
+      freezesDelta,
+      jitterMs,
+      decodeMs,
+      renderedFps,
     }
   }
 

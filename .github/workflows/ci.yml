@@ -28,6 +28,13 @@ jobs:
         run: cargo build --release -p conductor-host
       - name: Tests
         run: cargo test --workspace
+      # Deterministic simulated bandwidth traces; not an unreliable FPS
+      # benchmark on an oversubscribed virtual GitHub runner.
+      - name: Streaming regression tests (release)
+        run: cargo test --release -p conductor-host quality::tests
+      - name: Package Windows desktop
+        working-directory: app
+        run: npx tauri build --ci --bundles nsis
 
   android:
     runs-on: ubuntu-latest

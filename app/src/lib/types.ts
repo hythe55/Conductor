@@ -46,6 +46,8 @@ export interface HostInfo {
   paste?: boolean
   /** Takes `sharp` when a session starts, and `setSharp` messages. From 0.1.12. */
   sharp?: boolean
+  /** Supports the three-way quality selector including Balanced. */
+  balanced?: boolean
   /**
    * Someone at this PC has to allow each device that connects, so starting a
    * session can take a while. A refusal is a 409 with a sentence saying why. From 0.1.12.
@@ -162,6 +164,8 @@ export type ClientMsg =
   | { t: 'hideScreen'; hide: boolean }
   /** Changes what gives way on a slow connection; see `SessionOptions.sharp`. */
   | { t: 'setSharp'; sharp: boolean }
+  /** Select a three-way streaming quality policy on newer hosts. */
+  | { t: 'setMode'; mode: 'smooth' | 'balanced' | 'sharp' }
 
 export type HostMsg =
   | { t: 'hello'; host: HostInfo; display: string }
