@@ -192,8 +192,8 @@
       display: start.display || undefined,
       // Desktop viewers can request the source's native resolution. Mobile
       // stays capped to its display so decoding unnecessary 4K is avoided.
-      maxWidth: isPhoneApp ? longSide : 7680,
-      maxHeight: isPhoneApp ? longSide : 4320,
+      maxWidth: isPhoneApp || coarse ? longSide : 7680,
+      maxHeight: isPhoneApp || coarse ? longSide : 4320,
       mode: start.balanced ? untrack(() => mode) : undefined,
       sharp: start.sharp && !start.balanced ? untrack(() => mode === 'sharp') : undefined,
     },

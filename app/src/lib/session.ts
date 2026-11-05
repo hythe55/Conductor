@@ -99,7 +99,7 @@ export class RemoteSession {
       // Give Wi-Fi jitter one frame of slack rather than requiring every
       // packet to arrive immediately. Browsers may ignore these hints.
       try {
-        if ('jitterBufferTarget' in r) r.jitterBufferTarget = 0.03
+        if ('jitterBufferTarget' in r) r.jitterBufferTarget = 30 // milliseconds
         if ('playoutDelayHint' in r) r.playoutDelayHint = 0.03
       } catch {
         // Not all WebViews permit a writable playout target.
