@@ -35,7 +35,7 @@ pub struct Quality {
 
 impl Quality {
     pub fn new(mode: QualityMode, now: Instant) -> Self {
-        Self { mode, step: 0, pending: None, started: now }
+        Self { mode, step: if mode == QualityMode::Balanced { 1 } else { 0 }, pending: None, started: now }
     }
 
     fn tiers(&self) -> &'static [(f64, u32)] {
@@ -74,7 +74,7 @@ impl Quality {
         }
         let before = (self.scale(), self.fps());
         self.mode = mode;
-        self.step = if pixels == 0 { 0 } else { self.carried(bitrate, pixels, 1.0) };
+        self.step = if pixels == 0 { if mode == QualityMode::Balanced { 1 } else { 0 } } else { self.carried(bitrate, pixels, 1.0) };
         self.pending = None;
         before != (self.scale(), self.fps())
     }
@@ -130,19 +130,25 @@ mod tests {
 
     #[test]
     fn full_rate_on_fast_connection() {
-        for mode in [QualityMode::Smooth, QualityMode::Balanced, QualityMode::Sharp] {
+        for mode in [QualityMode::Smooth, QualityMode::Sharp] {
             let (mut q, t) = start(mode);
             assert!(!q.update(20_000_000, P1440, t));
             assert_eq!((q.scale(), q.fps()), (1.0, 60));
         }
+        // Balanced starts at native 30 and earns 60 FPS after sustained headroom.
+        let (mut q, t) = start(QualityMode::Balanced);
+        assert_eq!((q.scale(), q.fps()), (1.0, 30));
+        assert!(!q.update(20_000_000, P1440, t));
+        assert!(q.update(20_000_000, P1440, t + UP_AFTER));
+        assert_eq!((q.scale(), q.fps()), (1.0, 60));
     }
 
     #[test]
     fn balanced_keeps_native_at_thirty_before_scaling() {
         let (mut q, t) = start(QualityMode::Balanced);
-        settle(&mut q, 5_000_000, t);
         assert_eq!((q.scale(), q.fps()), (1.0, 30));
-
+        assert!(!q.update(5_000_000, P1440, t));
+        assert!(!q.update(5_000_000, P1440, t + DOWN_AFTER));
         settle(&mut q, 2_000_000, t + DOWN_AFTER + Duration::from_secs(1));
         assert_eq!((q.scale(), q.fps()), (0.75, 30));
     }
@@ -179,7 +185,7 @@ mod tests {
             let rate = if i % 4 == 0 { 1_000_000 } else { 20_000_000 };
             assert!(!q.update(rate, P1440, t + Duration::from_millis(i * 50)));
         }
-        assert_eq!((q.scale(), q.fps()), (1.0, 60));
+        assert_eq!((q.scale(), q.fps()), (1.0, 30));
     }
 
     #[test]
@@ -187,12 +193,12 @@ mod tests {
         let (mut q, t) = start(QualityMode::Balanced);
         let mut changes = 0;
         for i in 0..200 {
-            if q.update(5_000_000, P1440, t + Duration::from_millis(i * 50)) {
+            if q.update(2_000_000, P1440, t + Duration::from_millis(i * 50)) {
                 changes += 1;
             }
         }
         assert_eq!(changes, 1);
-        assert_eq!((q.scale(), q.fps()), (1.0, 30));
+        assert_eq!((q.scale(), q.fps()), (0.75, 30));
     }
 
     #[test]
