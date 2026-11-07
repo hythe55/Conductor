@@ -318,7 +318,7 @@
     d: Device,
     adapters: WakeAdapter[],
     sources: WakeSource[],
-  ): Promise<'woke' | 'asleep' | 'failed'> {
+  ): Promise<'woke' | 'unconfirmed' | 'failed'> {
     const url = deviceUrl(d)
     const deadline = Date.now() + 120_000
     let sentAny = false
@@ -341,10 +341,10 @@
       }
       if (!sentThisRound) {
         if (!sentAny && lastError) throw lastError
-        return sentAny ? 'asleep' : 'failed'
+        return sentAny ? 'unconfirmed' : 'failed'
       }
     }
-    return 'asleep'
+    return 'unconfirmed'
   }
 
   async function runWake(d: Device) {
@@ -364,8 +364,8 @@
           set(d.id, null)
           load()
           break
-        case 'asleep':
-          note(d.id, `${d.name} didn’t wake. Try again, or wake it at the PC.`, true)
+        case 'unconfirmed':
+          note(d.id, `Wake packets were sent to ${d.name}, but its Conductor service didn't respond. The PC may be awake; check that Conductor is installed and running there.`, true)
           break
         case 'failed':
           note(d.id, 'No available device could send the wake signal. Try again.', true)
@@ -398,7 +398,7 @@
     // A PC that has only just dropped off the network may not be listening for wake packets yet.
     await new Promise((r) => setTimeout(r, 15_000))
     set(d.id, { kind: 'busy', text: 'Waking…', waking: true })
-    let result: 'woke' | 'asleep' | 'failed'
+    let result: 'woke' | 'unconfirmed' | 'failed'
     try {
       result = await wakeAndWait(d, adapters, sources)
     } catch (e) {
@@ -406,11 +406,11 @@
       return
     }
     if (result !== 'woke') {
-      const why =
-        result === 'failed'
-          ? 'No available device could send the wake signal.'
-          : 'Its network adapter may not be set up to wake it.'
-      note(d.id, `${d.name} didn’t wake. ${why} Press a key or the power button on ${d.name} to wake it.`, true)
+      if (result === 'unconfirmed') {
+        note(d.id, `Wake packets were sent to ${d.name}, but Conductor didn't respond. Check whether the PC woke; its Conductor service may be stopped or outdated.`, true)
+      } else {
+        note(d.id, `No available device could send the wake signal to ${d.name}. Press a key or the power button on the PC to wake it.`, true)
+      }
       return
     }
     try {
