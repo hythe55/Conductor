@@ -56,11 +56,22 @@ class LocalNetwork(private val activity: Activity) {
 
       var sent = false
       var firstFailure: String? = null
+      var vpnBlockedBinding = false
       for (route in matches) {
         try {
-          DatagramSocket().use { socket ->
-            // Route the broadcast over Wi-Fi/Ethernet rather than the VPN.
-            route.network.bindSocket(socket)
+          var chosen = DatagramSocket()
+          try {
+            // Prefer the physical Wi-Fi/Ethernet network instead of the VPN.
+            route.network.bindSocket(chosen)
+          } catch (e: java.net.SocketException) {
+            chosen.close()
+            if (!isBypassDenied(e)) throw e
+            // VPNs may disallow selecting the underlying network even when
+            // ordinary sockets can still send packets to the local subnet.
+            vpnBlockedBinding = true
+            chosen = DatagramSocket()
+          }
+          chosen.use { socket ->
             socket.broadcast = true
             val packet = ByteArray(102) { i ->
               if (i < 6) 0xff.toByte() else route.target.mac[(i - 6) % 6]
@@ -86,7 +97,12 @@ class LocalNetwork(private val activity: Activity) {
         }
       }
 
-      if (sent) "" else "Android could not send wake packets: ${firstFailure ?: "no packets were sent"}"
+      if (sent) "" else if (vpnBlockedBinding) {
+        "Android's VPN restricted direct Wi-Fi access, and the fallback could not send wake packets. " +
+          "Check 'Block connections without VPN' in Android's VPN settings. " +
+          "If using a Tailscale exit node, enable 'Allow LAN access'. " +
+          "${firstFailure ?: "No packets were sent"}"
+      } else "Android could not send wake packets: ${firstFailure ?: "no packets were sent"}"
     } catch (e: Exception) {
       "Android could not prepare Wake-on-LAN: ${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
     }
@@ -136,6 +152,11 @@ class LocalNetwork(private val activity: Activity) {
       }
     }
     return result
+  }
+
+  private fun isBypassDenied(error: java.net.SocketException): Boolean {
+    val message = error.message.orEmpty()
+    return message.contains("EPERM") || message.contains("Operation not permitted", ignoreCase = true)
   }
 
   private fun parseIp(value: String): Int? {
